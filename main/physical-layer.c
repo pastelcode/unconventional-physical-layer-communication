@@ -1,13 +1,21 @@
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "esp_err.h"
+#include "esp_event.h"
+#include "esp_mac.h"
+#include "esp_netif.h"
+#include "esp_now.h"
 #include "esp_rom_sys.h"
 #include "esp_timer.h"
+#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "nvs_flash.h"
 
 /* Infrared transmitter / receiver */
 #define IR_TX_GPIO          GPIO_NUM_18
@@ -24,6 +32,19 @@
 
 /* Receiver sampling period while the transmitter is active. */
 #define IR_RX_POLL_US       2000
+
+/* ESP-NOW */
+#define ESPNOW_CHANNEL      1                   /* both boards must match */
+
+/* One bit plus a counter, so dropped frames are visible on the other side. */
+typedef struct __attribute__((packed)) {
+    uint8_t  bit;
+    uint32_t seq;
+} bit_frame_t;
+
+static const uint8_t broadcast_mac[ESP_NOW_ETH_ALEN] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+};
 
 static void ir_tx_init(void)
 {
@@ -90,14 +111,84 @@ static bool ir_rx_detect(uint32_t duration_us)
     return detected;
 }
 
+static void wifi_init(void)
+{
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ESP_ERROR_CHECK(nvs_flash_init());
+    } else {
+        ESP_ERROR_CHECK(err);
+    }
+
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_start());
+
+    /* Fix the channel so every board sits on the same one without an AP. */
+    ESP_ERROR_CHECK(esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE));
+}
+
+static void on_send_done(const esp_now_send_info_t *tx_info, esp_now_send_status_t status)
+{
+    (void)tx_info;
+    if (status != ESP_NOW_SEND_SUCCESS) {
+        printf("esp-now: transmission failed\n");
+    }
+}
+
+static void on_frame(const esp_now_recv_info_t *info, const uint8_t *data, int len)
+{
+    if (len < (int)sizeof(bit_frame_t)) {
+        printf("esp-now: short frame (%d bytes)\n", len);
+        return;
+    }
+
+    bit_frame_t frame;
+    memcpy(&frame, data, sizeof(frame));
+
+    const uint8_t *src = info->src_addr;
+    printf("esp-now: rx bit %u seq %lu from %02x:%02x:%02x:%02x:%02x:%02x (rssi %d)\n",
+           frame.bit, (unsigned long)frame.seq,
+           src[0], src[1], src[2], src[3], src[4], src[5],
+           info->rx_ctrl->rssi);
+}
+
+static void espnow_init(void)
+{
+    ESP_ERROR_CHECK(esp_now_init());
+    ESP_ERROR_CHECK(esp_now_register_send_cb(on_send_done));
+    ESP_ERROR_CHECK(esp_now_register_recv_cb(on_frame));
+
+    /* Broadcast peer: no MAC address needs to be configured on either board. */
+    esp_now_peer_info_t peer = {
+        .channel = ESPNOW_CHANNEL,
+        .ifidx = WIFI_IF_STA,
+        .encrypt = false,
+    };
+    memcpy(peer.peer_addr, broadcast_mac, ESP_NOW_ETH_ALEN);
+    ESP_ERROR_CHECK(esp_now_add_peer(&peer));
+}
+
 void app_main(void)
 {
     ir_tx_init();
     ir_rx_init();
+    wifi_init();
+    espnow_init();
 
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
     printf("Physical Layer Project\n");
     printf("IR transmitter on GPIO%d (%d Hz carrier), receiver on GPIO%d\n",
            IR_TX_GPIO, IR_CARRIER_HZ, IR_RX_GPIO);
+    printf("ESP-NOW on channel %d, station MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
+           ESPNOW_CHANNEL, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
     uint32_t cycle = 0;
     while (1) {
@@ -105,9 +196,18 @@ void app_main(void)
         bool detected = ir_rx_detect(IR_ON_MS * 1000);
         ir_tx_set(false);
 
-        printf("cycle %lu: transmitter ON -> receiver %s\n",
-               (unsigned long)++cycle,
-               detected ? "DETECTED a signal" : "saw nothing");
+        bit_frame_t frame = {
+            .bit = detected ? 1 : 0,
+            .seq = ++cycle,
+        };
+        esp_err_t err = esp_now_send(broadcast_mac, (const uint8_t *)&frame,
+                                     sizeof(frame));
+
+        printf("cycle %lu: receiver %s -> esp-now bit %u %s\n",
+               (unsigned long)cycle,
+               detected ? "DETECTED a signal" : "saw nothing",
+               frame.bit,
+               err == ESP_OK ? "queued" : esp_err_to_name(err));
 
         vTaskDelay(pdMS_TO_TICKS(IR_OFF_MS));
     }
