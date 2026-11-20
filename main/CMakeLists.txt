@@ -1,2 +1,22 @@
-idf_component_register(SRCS "physical-layer.c"
-                    INCLUDE_DIRS ".")
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "clock_gpio.c"
+        "crc8.c"
+        "diagnostics.c"
+        "espnow_lane.c"
+        "frame.c"
+        "infrared.c"
+        "protocol_fsm.c"
+        "serial_cli.c"
+        "transaction.c"
+    INCLUDE_DIRS "."
+    PRIV_REQUIRES
+        esp_wifi
+        nvs_flash
+        esp_timer
+        esp_event
+        esp_netif
+        esp_driver_gpio
+        esp_driver_ledc
+)

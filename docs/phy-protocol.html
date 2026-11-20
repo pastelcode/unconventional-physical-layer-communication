@@ -1,0 +1,3019 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dual-Medium ESP32 PHY — interactive field guide</title>
+<meta name="description" content="An interactive explanation of the dual-medium ESP32 PHY protocol: wiring, 36-bit frame, lane pairing, clocked timing, retries and the state machine.">
+<style>
+/* ============================================================ tokens */
+:root {
+  --bg: #070b10;
+  --bg-soft: #0b121a;
+  --panel: rgba(255, 255, 255, 0.035);
+  --panel-strong: #101823;
+  --panel-hover: rgba(255, 255, 255, 0.07);
+  --line: rgba(255, 255, 255, 0.10);
+  --line-soft: rgba(255, 255, 255, 0.055);
+  --line-strong: rgba(255, 255, 255, 0.20);
+  --text: #e9f0f8;
+  --muted: #93a4b8;
+  --faint: #66788c;
+  --ir: #ffb055;
+  --wifi: #49d8ff;
+  --clk: #8bf3b0;
+  --violet: #b7a2ff;
+  --pink: #ff8fc0;
+  --amber: #ffd166;
+  --red: #ff7a90;
+  --ok: #7ce6a7;
+  --shadow: 0 30px 80px -40px rgba(0, 0, 0, 0.95);
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --radius: 22px;
+  color-scheme: dark;
+}
+
+html[data-theme="light"] {
+  --bg: #f4f1ea;
+  --bg-soft: #fbf9f4;
+  --panel: rgba(255, 255, 255, 0.66);
+  --panel-strong: #fffdf8;
+  --panel-hover: rgba(20, 30, 45, 0.05);
+  --line: rgba(22, 32, 45, 0.12);
+  --line-soft: rgba(22, 32, 45, 0.07);
+  --line-strong: rgba(22, 32, 45, 0.24);
+  --text: #17222e;
+  --muted: #5b6b7c;
+  --faint: #8492a1;
+  --ir: #b35900;
+  --wifi: #00758f;
+  --clk: #06784a;
+  --violet: #5a41c9;
+  --pink: #b12665;
+  --amber: #926400;
+  --red: #b0233b;
+  --ok: #127a4d;
+  --shadow: 0 26px 60px -38px rgba(30, 40, 50, 0.45);
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { scroll-behavior: smooth; scroll-padding-top: 92px; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.62 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  background:
+    radial-gradient(900px 520px at 8% -8%, color-mix(in srgb, var(--ir) 16%, transparent), transparent 65%),
+    radial-gradient(900px 520px at 96% 4%, color-mix(in srgb, var(--wifi) 14%, transparent), transparent 62%),
+    radial-gradient(900px 700px at 55% 108%, color-mix(in srgb, var(--clk) 10%, transparent), transparent 65%);
+  opacity: 0.85;
+}
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(var(--line-soft) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line-soft) 1px, transparent 1px);
+  background-size: 64px 64px;
+  mask-image: linear-gradient(to bottom, rgba(0,0,0,.55), transparent 78%);
+  opacity: 0.5;
+}
+
+::selection { background: color-mix(in srgb, var(--wifi) 45%, transparent); color: var(--text); }
+
+a { color: inherit; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--wifi); outline-offset: 3px; border-radius: 6px; }
+
+.wrap { width: min(1180px, calc(100% - 48px)); margin-inline: auto; }
+.skip-link {
+  position: fixed; top: 10px; left: 10px; z-index: 100;
+  padding: 10px 14px; border-radius: 10px;
+  background: var(--panel-strong); border: 1px solid var(--line-strong);
+  transform: translateY(-160%); transition: transform .2s ease;
+}
+.skip-link:focus { transform: none; }
+
+/* ============================================================ top bar */
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  border-bottom: 1px solid var(--line-soft);
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  backdrop-filter: blur(16px) saturate(1.2);
+}
+.topbar-inner { display: flex; align-items: center; gap: 22px; height: 68px; }
+.brand {
+  display: inline-flex; align-items: center; gap: 10px;
+  text-decoration: none; font-weight: 700; letter-spacing: -0.01em; white-space: nowrap;
+}
+.brand-mark { width: 28px; height: 28px; color: var(--clk); flex: none; }
+.brand-dim { color: var(--faint); font-weight: 500; }
+.nav {
+  display: flex; align-items: center; gap: 2px;
+  margin-left: auto; overflow-x: auto; scrollbar-width: none;
+}
+.nav::-webkit-scrollbar { display: none; }
+.nav a {
+  text-decoration: none; color: var(--muted); font-size: 13px; font-weight: 550;
+  padding: 8px 10px; border-radius: 8px; white-space: nowrap;
+  transition: color .2s ease, background .2s ease;
+}
+.nav a:hover { color: var(--text); background: var(--panel-hover); }
+.nav a.is-current { color: var(--text); background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); }
+.topbar-actions { display: flex; gap: 8px; margin-left: 6px; }
+.icon-btn {
+  display: grid; place-items: center; width: 38px; height: 38px;
+  border-radius: 11px; border: 1px solid var(--line); background: var(--panel);
+  color: var(--muted); transition: color .2s, border-color .2s, background .2s;
+}
+.icon-btn:hover { color: var(--text); border-color: var(--line-strong); background: var(--panel-hover); }
+.icon-btn svg { width: 18px; height: 18px; }
+html[data-theme="dark"] .icon-sun { display: none; }
+html[data-theme="light"] .icon-moon { display: none; }
+
+/* ============================================================ shared */
+section { position: relative; }
+.section { padding: 92px 0; }
+.section + .section { border-top: 1px solid var(--line-soft); }
+.section-head { max-width: 800px; margin-bottom: 34px; }
+.eyebrow {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin: 0 0 12px; color: var(--muted);
+  font: 650 11.5px/1.2 var(--mono); letter-spacing: .16em; text-transform: uppercase;
+}
+.eyebrow::before {
+  content: ""; width: 22px; height: 1px;
+  background: linear-gradient(90deg, var(--wifi), transparent);
+}
+h1, h2, h3, h4 { margin: 0; letter-spacing: -0.025em; line-height: 1.12; font-weight: 680; }
+h2 { font-size: clamp(30px, 4vw, 48px); max-width: 24ch; text-wrap: balance; }
+h3 { font-size: 19px; letter-spacing: -0.015em; }
+.lede { color: var(--muted); font-size: clamp(16px, 1.4vw, 18px); margin: 16px 0 0; max-width: 72ch; }
+.micro { color: var(--faint); font-size: 12.5px; line-height: 1.55; margin: 0; }
+.card {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-strong) 78%, transparent), var(--panel));
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 24px;
+  box-shadow: var(--shadow);
+}
+.card.inset { background: color-mix(in srgb, var(--bg-soft) 72%, transparent); box-shadow: none; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.stack { display: grid; gap: 16px; align-content: start; }
+.badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 9px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--panel);
+  font: 600 11px/1.3 var(--mono); color: var(--muted); white-space: nowrap;
+}
+.badge .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.badge.ir { color: var(--ir); border-color: color-mix(in srgb, var(--ir) 35%, transparent); }
+.badge.wifi { color: var(--wifi); border-color: color-mix(in srgb, var(--wifi) 35%, transparent); }
+.badge.clk { color: var(--clk); border-color: color-mix(in srgb, var(--clk) 35%, transparent); }
+.badge.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+.callout {
+  display: flex; gap: 14px; align-items: flex-start;
+  border: 1px solid color-mix(in srgb, var(--amber) 32%, var(--line));
+  background: color-mix(in srgb, var(--amber) 7%, var(--bg-soft));
+  border-radius: 16px; padding: 16px 18px; color: var(--text);
+}
+.callout strong { color: var(--amber); }
+.callout .callout-icon { flex: none; color: var(--amber); font: 700 18px/1.3 var(--mono); }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 10px 17px; border-radius: 999px;
+  border: 1px solid var(--line-strong); background: var(--panel);
+  color: var(--text); text-decoration: none; font-size: 14px; font-weight: 620;
+  transition: transform .18s ease, background .2s ease, border-color .2s ease;
+}
+.btn:hover { background: var(--panel-hover); border-color: color-mix(in srgb, var(--text) 30%, transparent); transform: translateY(-1px); }
+.btn:active { transform: translateY(0); }
+.btn.primary {
+  background: linear-gradient(135deg, var(--wifi), var(--clk));
+  color: #041218; border-color: transparent;
+  box-shadow: 0 12px 30px -14px color-mix(in srgb, var(--wifi) 65%, transparent);
+}
+.btn.primary:hover { background: linear-gradient(135deg, var(--wifi), var(--clk)); filter: brightness(1.06); }
+.btn.small { padding: 7px 12px; font-size: 12.5px; }
+.btn[disabled] { opacity: .45; cursor: default; transform: none; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+  border-radius: 999px; padding: 7px 12px; font: 600 12px/1.2 var(--mono);
+  transition: color .18s, border-color .18s, background .18s;
+}
+.chip:hover { color: var(--text); border-color: var(--line-strong); }
+.chip.is-on { color: var(--text); background: color-mix(in srgb, var(--wifi) 14%, transparent); border-color: color-mix(in srgb, var(--wifi) 55%, transparent); }
+.seg { display: flex; flex-wrap: nowrap; gap: 3px; padding: 3px; border: 1px solid var(--line); border-radius: 13px; background: var(--bg-soft); }
+.seg button {
+  flex: 1 1 auto; border: 0; background: transparent; color: var(--muted);
+  padding: 8px 4px; border-radius: 9px; font: 620 11.5px/1.2 var(--mono);
+  transition: color .18s, background .18s;
+}
+.seg button:hover { color: var(--text); }
+.seg button[aria-pressed="true"] { color: var(--text); background: var(--panel-hover); box-shadow: inset 0 0 0 1px var(--line); }
+label.control-label.as-is { text-transform: none; letter-spacing: .04em; }
+label.control-label {
+  display: block; margin: 16px 0 7px;
+  font: 650 11px/1.2 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted);
+}
+.input, select.input, input[type="text"], input[type="number"], select {
+  width: 100%; padding: 10px 12px; border-radius: 11px;
+  border: 1px solid var(--line-strong); background: var(--bg-soft); color: var(--text);
+  font-family: var(--mono); font-size: 14px;
+}
+input[type="number"] { font-variant-numeric: tabular-nums; }
+.input:focus, input:focus, select:focus { border-color: var(--wifi); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--wifi) 18%, transparent); }
+.input.invalid { border-color: var(--red); box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 15%, transparent); }
+.inline-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.reveal { transform: translateY(14px); transition: transform .65s cubic-bezier(.2,.7,.2,1); }
+.reveal.in { transform: none; }
+
+/* ============================================================ hero */
+.hero { padding: 74px 0 66px; display: grid; grid-template-columns: 1.06fr .94fr; gap: 46px; align-items: center; }
+.hero h1 { font-size: clamp(42px, 6.2vw, 76px); letter-spacing: -0.045em; line-height: 1.02; }
+.hero h1 .grad {
+  background: linear-gradient(100deg, var(--ir), var(--wifi) 52%, var(--clk));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.hero .lede { margin-top: 22px; max-width: 60ch; }
+.hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 28px; }
+.hero-meta { display: flex; flex-wrap: wrap; gap: 10px 22px; margin-top: 32px; color: var(--muted); font-size: 13px; }
+.hero-meta span { display: inline-flex; align-items: baseline; gap: 7px; }
+.hero-meta b { color: var(--text); font: 650 16px/1 var(--mono); }
+.hero-art { padding: 18px; border-radius: 26px; position: relative; overflow: hidden; }
+.hero-art::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(420px 220px at 50% 42%, color-mix(in srgb, var(--wifi) 10%, transparent), transparent 70%);
+}
+.hero-art svg { width: 100%; height: auto; display: block; }
+.hero-art .pin-label { font-size: 11.5px; }
+.hero-art .board-title { font-size: 14px; }
+.hero-art .board-sub { font-size: 10px; }
+.hero-art .signal-label { font-size: 10.5px; }
+.hero-art .board-rect { stroke: var(--line-strong); }
+.hero-caption { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 10px; padding: 0 6px; }
+.legend-item { display: inline-flex; align-items: center; gap: 7px; font: 600 11px/1 var(--mono); color: var(--muted); }
+.legend-item i { width: 18px; height: 3px; border-radius: 2px; background: currentColor; }
+.legend-item.ir { color: var(--ir); }
+.legend-item.wifi { color: var(--wifi); }
+.legend-item.clk { color: var(--clk); }
+.legend-item.gnd { color: var(--faint); }
+
+/* hero + wiring svg */
+.wire-line { fill: none; stroke-width: 2.1; stroke-linecap: round; }
+.wire-line.clk { stroke: var(--clk); }
+.wire-line.ir { stroke: var(--ir); }
+.wire-line.wifi { stroke: var(--wifi); stroke-dasharray: 5 7; }
+.wire-line.gnd { stroke: var(--faint); stroke-width: 1.5; stroke-dasharray: 3 6; }
+.wire-line.flow { stroke-dasharray: 7 9; animation: dash 1.5s linear infinite; }
+.wire-line.flow-slow { animation-duration: 2.6s; }
+@keyframes dash { to { stroke-dashoffset: -32; } }
+.board-rect { fill: color-mix(in srgb, var(--panel-strong) 88%, transparent); stroke: var(--line-strong); stroke-width: 1.2; }
+.board-title { fill: var(--text); font: 650 13px var(--mono); }
+.board-sub { fill: var(--faint); font: 500 9.5px var(--mono); }
+.pin-label { fill: var(--muted); font: 600 9.5px var(--mono); }
+.pin-num { fill: var(--faint); font: 500 8.5px var(--mono); }
+.pin-dot { fill: var(--bg-soft); stroke: currentColor; stroke-width: 1.2; }
+.pin-dot.clk { color: var(--clk); }
+.pin-dot.ir { color: var(--ir); }
+.signal-label { font: 650 9.5px var(--mono); letter-spacing: .04em; }
+.signal-label.clk { fill: var(--clk); }
+.signal-label.ir { fill: var(--ir); }
+.signal-label.wifi { fill: var(--wifi); }
+.signal-label.gnd { fill: var(--faint); }
+.motion-dot { fill: var(--clk); filter: drop-shadow(0 0 5px var(--clk)); }
+.motion-dot.ir { fill: var(--ir); filter: drop-shadow(0 0 5px var(--ir)); }
+.motion-dot.wifi { fill: var(--wifi); filter: drop-shadow(0 0 5px var(--wifi)); }
+.wiring { width: 100%; height: auto; display: block; }
+.wiring .ch-ir, .wiring .ch-clk, .wiring .ch-wifi, .wiring .ch-gnd { transition: opacity .3s ease; }
+.wiring[data-focus="clk"] .ch-ir,
+.wiring[data-focus="clk"] .ch-wifi,
+.wiring[data-focus="clk"] .ch-gnd,
+.wiring[data-focus="ir"] .ch-clk,
+.wiring[data-focus="ir"] .ch-wifi,
+.wiring[data-focus="ir"] .ch-gnd,
+.wiring[data-focus="wifi"] .ch-clk,
+.wiring[data-focus="wifi"] .ch-ir,
+.wiring[data-focus="wifi"] .ch-gnd { opacity: .13; }
+.diagram-card { padding: 18px; }
+.diagram-scroll { overflow-x: auto; scrollbar-width: thin; }
+.bits-hint { display: none; margin-top: 2px; }
+.diagram-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.caption { color: var(--faint); font-size: 12px; margin: 10px 2px 0; }
+
+/* ============================================================ medium */
+.medium-grid { display: grid; grid-template-columns: 1.25fr .75fr; gap: 18px; align-items: start; min-width: 0; }
+.medium-grid > *, .diagram-card, .diagram-scroll { min-width: 0; }
+.diagram-scroll { max-width: 100%; }
+.channel-card { border-left: 3px solid var(--channel, var(--line-strong)); }
+.channel-card[data-channel-card="clk"] { --channel: var(--clk); }
+.channel-card[data-channel-card="ir"] { --channel: var(--ir); }
+.channel-card[data-channel-card="wifi"] { --channel: var(--wifi); }
+.channel-card h3 { display: flex; align-items: center; gap: 9px; }
+.channel-card p { color: var(--muted); font-size: 14px; margin: 9px 0 0; }
+.channel-card .pin-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.pin-badge {
+  font: 600 10.5px/1.2 var(--mono); color: var(--muted);
+  padding: 4px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-soft);
+}
+.medium-note { margin-top: 18px; }
+
+/* ============================================================ frame */
+.builder { padding: 0; overflow: hidden; }
+.builder-grid { display: grid; grid-template-columns: 300px 1fr; }
+.builder-controls { padding: 24px; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--bg-soft) 55%, transparent); }
+.builder-output { padding: 24px; min-width: 0; }
+.input-row { display: flex; gap: 10px; align-items: stretch; }
+.input-row .input { flex: 1; }
+.char-readout {
+  display: grid; place-items: center; min-width: 58px; padding: 0 10px;
+  border: 1px solid var(--line); border-radius: 11px; background: var(--bg-soft);
+  font: 650 16px var(--mono); color: var(--amber);
+}
+.frame-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 18px; }
+.summary-title { font: 650 13px/1.3 var(--mono); color: var(--text); }
+.bits-scroll { overflow-x: auto; padding: 4px 2px 10px; scrollbar-width: thin; }
+.bits-strip { display: flex; gap: 6px; min-width: max-content; }
+.field {
+  --field-color: var(--violet);
+  border: 1px solid color-mix(in srgb, var(--field-color) 24%, var(--line));
+  background: color-mix(in srgb, var(--field-color) 5%, var(--bg-soft));
+  border-radius: 13px; padding: 7px 7px 6px;
+  transition: border-color .2s ease, background .2s ease, transform .2s ease;
+  cursor: pointer;
+}
+.field:hover, .field:focus-visible { border-color: color-mix(in srgb, var(--field-color) 65%, transparent); background: color-mix(in srgb, var(--field-color) 9%, var(--bg-soft)); }
+.field[data-field="SYN"] { --field-color: var(--violet); }
+.field[data-field="SFD"] { --field-color: var(--wifi); }
+.field[data-field="CONTROL"] { --field-color: var(--pink); }
+.field[data-field="DATA"] { --field-color: var(--amber); }
+.field[data-field="CRC"] { --field-color: var(--red); }
+.field-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; margin-bottom: 7px; }
+.field-name { font: 700 10px/1.2 var(--mono); letter-spacing: .12em; color: var(--field-color); }
+.field-value { font: 600 9.5px/1.2 var(--mono); color: var(--muted); }
+.bits { display: flex; gap: 2px; }
+.bit {
+  position: relative; width: 16px; height: 27px; border-radius: 4px;
+  display: grid; place-items: center;
+  font: 650 10px/1 var(--mono);
+  color: var(--faint);
+  background: color-mix(in srgb, var(--faint) 9%, transparent);
+  border: 1px solid transparent;
+  cursor: pointer; user-select: none;
+}
+.bit.one {
+  color: var(--field-color);
+  background: color-mix(in srgb, var(--field-color) 17%, transparent);
+  border-color: color-mix(in srgb, var(--field-color) 38%, transparent);
+}
+.bit:hover { outline: 1px solid color-mix(in srgb, var(--field-color) 70%, transparent); outline-offset: 1px; }
+.bit small { display: none; position: absolute; bottom: -14px; left: 50%; transform: translateX(-50%); font: 500 8px/1 var(--mono); color: var(--faint); }
+#frame-bits.show-idx .bit small { display: block; }
+#frame-bits.show-idx .bits-scroll { padding-bottom: 22px; }
+.code-line {
+  display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center;
+  margin-top: 18px; padding: 12px 14px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--bg-soft);
+  font: 500 12.5px/1.5 var(--mono); color: var(--muted);
+}
+.code-line b { color: var(--text); font-weight: 650; }
+.code-line .ok-mark { color: var(--ok); }
+.field-detail { margin-top: 16px; padding: 16px 18px; }
+.field-detail h4 { font-size: 15px; display: flex; align-items: center; gap: 9px; }
+.field-detail h4 .badge { font-size: 10px; }
+.field-detail p { color: var(--muted); font-size: 13.5px; margin: 8px 0 0; }
+.field-detail code { font-family: var(--mono); color: var(--text); }
+.toolbar-line { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.check { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; cursor: pointer; }
+.check input { accent-color: var(--wifi); }
+
+/* ============================================================ lanes */
+.lane-layout { display: grid; grid-template-columns: 1.35fr .65fr; gap: 18px; align-items: start; }
+.lane-card { min-width: 0; }
+.lane-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
+.lane-scroll { overflow-x: auto; padding-bottom: 8px; scrollbar-width: thin; }
+.lane-grid { display: grid; grid-auto-flow: column; grid-auto-columns: 37px; gap: 3px; min-width: max-content; }
+.lane-col { display: grid; gap: 3px; justify-items: center; padding: 2px; border-radius: 8px; border: 1px solid transparent; transition: background .2s, border-color .2s; }
+.lane-col.is-active { background: color-mix(in srgb, var(--text) 6%, transparent); border-color: var(--line-strong); }
+.lane-head { font: 600 9.5px/1.2 var(--mono); color: var(--faint); padding: 2px 0; }
+.lane-cell {
+  width: 32px; height: 28px; display: grid; place-items: center;
+  border-radius: 6px; border: 1px solid var(--line);
+  font: 650 11px/1 var(--mono); color: var(--faint);
+  background: color-mix(in srgb, var(--faint) 6%, transparent);
+}
+.lane-cell.ir.one { color: var(--ir); border-color: color-mix(in srgb, var(--ir) 42%, transparent); background: color-mix(in srgb, var(--ir) 16%, transparent); }
+.lane-cell.wifi.one { color: var(--wifi); border-color: color-mix(in srgb, var(--wifi) 42%, transparent); background: color-mix(in srgb, var(--wifi) 16%, transparent); }
+.lane-pair { font: 600 10px/1.2 var(--mono); color: var(--muted); padding: 2px 0 3px; }
+.lane-row-labels { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.decode-box { display: grid; gap: 8px; }
+.decode-row { display: grid; grid-template-columns: 70px 1fr; gap: 10px; align-items: baseline; font-size: 13px; }
+.decode-row .k { font: 650 10px/1.3 var(--mono); letter-spacing: .1em; color: var(--muted); text-transform: uppercase; }
+.decode-row .v { font-family: var(--mono); font-size: 12.5px; color: var(--text); word-break: break-word; }
+.status-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 999px; font: 650 11px var(--mono); }
+.status-pill.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.status-pill.bad { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
+.wrong-box { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line-soft); }
+.wrong-box h4 { font-size: 13px; color: var(--muted); font-weight: 600; }
+.wrong-box p { font-size: 12.5px; color: var(--muted); margin: 8px 0 0; }
+.mono-break { font-family: var(--mono); font-size: 11px; word-break: break-all; color: var(--faint); }
+
+/* ============================================================ timing */
+.timing-layout { display: grid; grid-template-columns: 1.35fr .65fr; gap: 18px; align-items: start; }
+.timing-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; justify-content: space-between; margin-bottom: 16px; }
+.control-group { display: flex; align-items: end; gap: 8px; flex-wrap: wrap; }
+.control-group label { font: 650 10px/1.2 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); display: block; margin-bottom: 5px; }
+.control-group input[type="range"] { width: 150px; accent-color: var(--clk); }
+.select-compact { width: auto; padding: 7px 9px; font-size: 12px; }
+.cycle-echo { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px; font: 600 11.5px var(--mono); color: var(--muted); }
+.cycle-echo .swatch { width: 10px; height: 10px; border-radius: 3px; background: currentColor; }
+.cycle-echo .ir { color: var(--ir); } .cycle-echo .wifi { color: var(--wifi); }
+.trace-wrap { display: grid; grid-template-columns: 46px 1fr; gap: 10px; }
+.trace-axis { display: grid; grid-template-columns: 26fr 28fr 14fr 16fr 16fr; gap: 0; margin-left: 56px; width: calc(100% - 56px); }
+.trace-axis span { font: 600 9.5px/1.2 var(--mono); color: var(--faint); padding: 0 4px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trace-side { display: grid; align-content: end; gap: 8px; padding-top: 24px; }
+.trace-side span { height: 34px; display: flex; align-items: center; font: 650 10px var(--mono); color: var(--muted); }
+.trace-plot { position: relative; display: grid; gap: 8px; padding: 10px 0 6px; }
+.trace-row { display: grid; grid-template-columns: 26fr 28fr 14fr 16fr 16fr; height: 34px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg-soft); }
+.trace-cell { position: relative; border-right: 1px solid var(--line-soft); }
+.trace-cell:last-child { border-right: 0; }
+.trace-cell.is-active { background: color-mix(in srgb, var(--text) 7%, transparent); }
+.trace-row.ir .trace-cell.setup, .trace-row.ir .trace-cell.send, .trace-row.ir .trace-cell.guard { background: color-mix(in srgb, var(--ir) 20%, transparent); }
+.trace-row.ir .trace-cell::after { content: ""; position: absolute; left: 8%; right: 8%; bottom: 38%; height: 2px; border-radius: 2px; background: var(--ir); opacity: .35; }
+.trace-row.ir .trace-cell.setup::after, .trace-row.ir .trace-cell.send::after, .trace-row.ir .trace-cell.guard::after { opacity: 1; bottom: 48%; height: 3px; }
+.trace-row.wifi .trace-cell::after { content: ""; position: absolute; left: 12%; right: 12%; top: 50%; height: 1px; background: var(--wifi); opacity: .25; }
+.trace-row.wifi .trace-cell.send::after { opacity: 0; }
+.packet-dots { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 5px; opacity: 0; transition: opacity .2s; }
+.trace-cell.send .packet-dots { opacity: 1; }
+.packet-dots i { width: 8px; height: 14px; border-radius: 2px; background: color-mix(in srgb, var(--wifi) 70%, transparent); box-shadow: 0 0 8px color-mix(in srgb, var(--wifi) 50%, transparent); }
+.trace-row.clk .trace-cell::after { content: ""; position: absolute; left: 0; right: 0; bottom: 9px; height: 2px; background: var(--clk); opacity: .55; }
+.trace-row.clk .trace-cell.high::after { bottom: 23px; background: var(--clk); opacity: 1; height: 2px; }
+.trace-row.clk .trace-cell.high::before { content: ""; position: absolute; left: -1px; bottom: 9px; width: 2px; height: 14px; background: var(--clk); }
+.trace-row.clk .trace-cell.low-after::before { content: ""; position: absolute; left: -1px; bottom: 9px; width: 2px; height: 14px; background: var(--clk); }
+.playhead { position: absolute; top: 4px; bottom: 2px; width: 2px; background: var(--text); box-shadow: 0 0 12px var(--text); opacity: 0; pointer-events: none; transition: opacity .2s; }
+.playhead.on { opacity: .85; }
+.phase-cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-top: 14px; }
+.phase-card {
+  text-align: left; border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px;
+  background: var(--bg-soft); color: var(--muted); transition: border-color .2s, background .2s, color .2s;
+}
+.phase-card:hover { border-color: var(--line-strong); color: var(--text); }
+.phase-card.is-active { border-color: var(--phase, var(--wifi)); color: var(--text); background: color-mix(in srgb, var(--phase, var(--wifi)) 11%, var(--bg-soft)); }
+.phase-card .p-name { display: block; font: 650 10px/1.3 var(--mono); color: var(--phase, var(--text)); }
+.phase-card .p-time { display: block; font: 600 11px/1.4 var(--mono); color: var(--text); margin-top: 2px; }
+.phase-card .p-note { display: block; font-size: 10.5px; line-height: 1.35; margin-top: 4px; color: var(--faint); }
+.budget-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.budget-out { margin-top: 16px; padding: 14px; border-radius: 12px; background: var(--bg-soft); border: 1px solid var(--line); }
+.budget-out strong { display: block; font: 650 26px/1.1 var(--mono); color: var(--clk); }
+.budget-out span { color: var(--muted); font-size: 12px; }
+.const-list { display: grid; gap: 0; margin-top: 4px; }
+.const-row { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line-soft); font-size: 12.5px; }
+.const-row:last-child { border-bottom: 0; }
+.const-row .k { color: var(--muted); }
+.const-row .v { font-family: var(--mono); color: var(--text); white-space: nowrap; }
+
+/* ============================================================ simulator */
+.sim { padding: 0; overflow: hidden; }
+.sim-top { display: flex; flex-wrap: wrap; gap: 16px; align-items: end; justify-content: space-between; padding: 20px 22px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg-soft) 55%, transparent); }
+.sim-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+.sim-controls .field-group { min-width: 130px; }
+.sim-controls .field-group.wide { min-width: 190px; flex: 1; }
+.sim-badges { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.sim-badge { font: 600 10.5px/1.3 var(--mono); color: var(--muted); padding: 5px 9px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg-soft); }
+.sim-badge b { color: var(--text); }
+.sim-badge.owner-a b { color: var(--clk); }
+.stage { display: grid; grid-template-columns: 132px 1fr 132px; gap: 16px; align-items: center; padding: 26px 22px 18px; }
+.board-chip {
+  border: 1px solid var(--line-strong); border-radius: 16px; padding: 14px 12px;
+  background: var(--bg-soft); text-align: center; position: relative;
+  transition: border-color .25s, box-shadow .25s;
+}
+.board-chip.is-owner { border-color: color-mix(in srgb, var(--clk) 55%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--clk) 22%, transparent), 0 0 26px -12px var(--clk); }
+.board-chip .b-name { font: 700 13px/1.2 var(--mono); letter-spacing: .08em; }
+.board-chip .b-role { display: block; font: 600 9px/1.3 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--faint); margin-top: 3px; }
+.board-chip .b-state { display: block; margin-top: 9px; font: 600 10px/1.3 var(--mono); color: var(--muted); padding: 4px 6px; border-radius: 6px; background: color-mix(in srgb, var(--text) 5%, transparent); overflow: hidden; text-overflow: ellipsis; }
+.board-chip .b-state.is-hot { color: var(--text); background: color-mix(in srgb, var(--wifi) 14%, transparent); }
+.wire-scene { position: relative; display: grid; gap: 7px; padding-bottom: 18px; }
+.wire-row { display: grid; grid-template-columns: 50px 1fr; gap: 9px; align-items: center; font: 650 9.5px/1.2 var(--mono); color: var(--faint); }
+.track { position: relative; height: 9px; border-radius: 99px; background: color-mix(in srgb, var(--text) 7%, transparent); overflow: hidden; }
+.track::after { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(90deg, transparent 0 8px, color-mix(in srgb, var(--text) 8%, transparent) 8px 16px); opacity: .7; }
+.wire-row .pulse { position: absolute; top: 50%; left: -12%; width: 30px; height: 30px; border-radius: 50%; transform: translateY(-50%); opacity: 0; pointer-events: none; z-index: 1; }
+.wire-row[data-wire="ir"] .pulse { background: radial-gradient(circle, color-mix(in srgb, var(--ir) 85%, transparent), transparent 68%); }
+.wire-row[data-wire="wifi"] .pulse { background: radial-gradient(circle, color-mix(in srgb, var(--wifi) 85%, transparent), transparent 68%); }
+.wire-row[data-wire="clk"] .pulse { background: radial-gradient(circle, color-mix(in srgb, var(--clk) 85%, transparent), transparent 68%); }
+.wire-scene.is-live .pulse { opacity: 1; }
+.wire-scene.is-live.to-b .pulse { animation: pulse-right .82s cubic-bezier(.4,.1,.5,1) both; }
+.wire-scene.is-live.to-a .pulse { animation: pulse-left .82s cubic-bezier(.4,.1,.5,1) both; }
+.wire-row[data-wire="ir"] .pulse { animation-delay: 0s !important; }
+.wire-row[data-wire="wifi"] .pulse { animation-delay: .05s !important; }
+.wire-row[data-wire="clk"] .pulse { animation-delay: .1s !important; }
+@keyframes pulse-right { 0% { left: -12%; opacity: 0; } 14% { opacity: 1; } 86% { opacity: 1; } 100% { left: 100%; opacity: 0; } }
+@keyframes pulse-left { 0% { left: 100%; opacity: 0; } 14% { opacity: 1; } 86% { opacity: 1; } 100% { left: -12%; opacity: 0; } }
+.cycle-readout { position: absolute; left: 59px; bottom: 0; font: 600 10px/1.2 var(--mono); color: var(--faint); }
+.cycle-readout b { color: var(--clk); }
+.sim-progress { height: 3px; background: var(--line-soft); }
+.sim-progress > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--wifi), var(--clk)); transition: width .3s ease; }
+.sim-lower { display: grid; grid-template-columns: 1.25fr .75fr; gap: 0; border-top: 1px solid var(--line); }
+.sim-log-wrap { padding: 18px 22px; border-right: 1px solid var(--line); min-width: 0; }
+.sim-lower h3 { font: 650 10px/1.2 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+.sim-log { list-style: none; margin: 0; padding: 0; max-height: 250px; overflow-y: auto; display: grid; gap: 5px; scrollbar-width: thin; }
+.log-item { display: grid; grid-template-columns: 18px 1fr; gap: 8px; padding: 6px 8px; border-radius: 7px; font: 500 11.5px/1.45 var(--mono); color: var(--muted); background: color-mix(in srgb, var(--text) 3.5%, transparent); animation: log-in .25s ease both; }
+@keyframes log-in { from { opacity: 0; transform: translateY(3px); } }
+.log-item .log-glyph { font-weight: 700; text-align: center; }
+.log-item.kind-tx { color: var(--violet); }
+.log-item.kind-ack { color: var(--clk); }
+.log-item.kind-ok, .log-item.kind-deliver { color: var(--ok); }
+.log-item.kind-nack, .log-item.kind-bad, .log-item.kind-lost { color: var(--red); }
+.log-item.kind-warn, .log-item.kind-retry { color: var(--amber); }
+.log-item.kind-info { color: var(--muted); }
+.sim-result-panel { padding: 18px 22px; }
+.received { display: grid; gap: 10px; }
+.recv-block { border: 1px solid var(--line); border-radius: 11px; padding: 10px 12px; background: var(--bg-soft); }
+.recv-block .to { font: 650 9.5px/1.2 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
+.recv-block .text { font-family: var(--mono); font-size: 14px; color: var(--text); margin-top: 4px; word-break: break-word; min-height: 1.5em; }
+.recv-block .hex { font-family: var(--mono); font-size: 10px; color: var(--faint); margin-top: 3px; letter-spacing: .02em; }
+.recv-empty { color: var(--faint); font-size: 12.5px; }
+.sim-note { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+.sim-verdict { margin-top: 12px; font-size: 12px; color: var(--muted); }
+.sim-verdict b { color: var(--text); }
+
+/* ============================================================ reliability */
+.packet-visual { display: flex; gap: 5px; flex-wrap: wrap; margin: 16px 0 8px; }
+.packet-byte {
+  border: 1px solid var(--line); border-radius: 9px; background: var(--bg-soft);
+  padding: 8px 10px; min-width: 62px; text-align: center;
+  font: 650 12px/1.2 var(--mono); color: var(--text);
+  transition: border-color .2s, background .2s;
+}
+.packet-byte:hover, .packet-byte.is-on { border-color: var(--wifi); background: color-mix(in srgb, var(--wifi) 12%, var(--bg-soft)); }
+.packet-byte span { display: block; font: 500 8.5px/1.4 var(--mono); letter-spacing: .05em; color: var(--faint); text-transform: uppercase; }
+.packet-detail { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-soft); font-size: 13px; color: var(--muted); min-height: 58px; }
+.packet-detail b { color: var(--text); font-family: var(--mono); font-size: 12px; }
+.dupe-flow { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: center; margin-top: 14px; }
+.dupe-box { border: 1px solid var(--line); border-radius: 11px; background: var(--bg-soft); padding: 10px 12px; font: 600 11px/1.5 var(--mono); color: var(--muted); }
+.dupe-box b { color: var(--text); }
+.dupe-arrow { color: var(--faint); font: 700 16px var(--mono); }
+.crc-lab { display: grid; gap: 12px; }
+.crc-result { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.crc-value { font: 700 34px/1 var(--mono); color: var(--red); letter-spacing: -0.02em; }
+.crc-params { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; margin-top: 4px; }
+.crc-params .const-row { font-size: 11.5px; padding: 6px 0; }
+.limits { display: grid; gap: 10px; padding: 0; margin: 0; list-style: none; }
+.limits li { display: grid; grid-template-columns: 18px 1fr; gap: 9px; color: var(--muted); font-size: 13.5px; }
+.limits li::before { content: "!"; color: var(--amber); font: 700 12px/1.5 var(--mono); text-align: center; }
+
+/* ============================================================ state machine */
+.fsm-card { padding: 14px; }
+.fsm-layout { grid-template-columns: 1.4fr .6fr; align-items: start; }
+.fsm-svg { width: 100%; height: auto; display: block; }
+.fsm-node { cursor: pointer; }
+.fsm-node rect { fill: var(--bg-soft); stroke: var(--line-strong); stroke-width: 1.2; transition: stroke .2s, fill .2s, filter .2s; }
+.fsm-node text { fill: var(--text); font: 650 11px var(--mono); text-anchor: middle; dominant-baseline: middle; pointer-events: none; }
+.fsm-node:hover rect { stroke: var(--wifi); }
+.fsm-node.is-active rect { stroke: var(--clk); fill: color-mix(in srgb, var(--clk) 9%, var(--bg-soft)); filter: drop-shadow(0 0 9px color-mix(in srgb, var(--clk) 35%, transparent)); }
+.fsm-node[data-state="LINK_ERROR"].is-active rect { stroke: var(--red); fill: color-mix(in srgb, var(--red) 10%, var(--bg-soft)); filter: drop-shadow(0 0 9px color-mix(in srgb, var(--red) 35%, transparent)); }
+.fsm-edge { fill: none; stroke: var(--faint); stroke-width: 1.3; opacity: .65; }
+.fsm-edge.dashed { stroke-dasharray: 4 5; }
+.fsm-label { fill: var(--faint); font: 500 9.5px var(--mono); }
+.fsm-detail { margin-top: 6px; padding: 16px 18px; }.fsm-detail h4 { font: 650 13px/1.3 var(--mono); color: var(--text); }
+.fsm-detail p { margin: 7px 0 0; color: var(--muted); font-size: 13px; }
+
+/* ============================================================ lab */
+.const-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.const-tile { border: 1px solid var(--line); border-radius: 13px; padding: 14px; background: var(--bg-soft); }
+.const-tile .name { font: 650 9.5px/1.3 var(--mono); letter-spacing: .08em; color: var(--faint); text-transform: uppercase; }
+.const-tile .val { font: 650 24px/1.2 var(--mono); color: var(--text); margin-top: 4px; letter-spacing: -0.02em; }
+.const-tile .val small { font-size: 11px; color: var(--muted); font-weight: 500; }
+.const-tile .note { color: var(--faint); font-size: 11px; line-height: 1.4; margin-top: 4px; }
+.checklist { display: grid; gap: 2px; margin-top: 4px; }
+.check-item { display: grid; grid-template-columns: 22px 1fr; gap: 10px; align-items: start; padding: 10px 8px; border-radius: 9px; cursor: pointer; transition: background .18s; }
+.check-item:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+.check-item input { margin-top: 2px; width: 16px; height: 16px; accent-color: var(--clk); }
+.check-item span { color: var(--muted); font-size: 13px; line-height: 1.45; }
+.check-item input:checked + span { color: var(--faint); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--faint) 60%, transparent); }
+.check-progress { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.check-progress .bar { flex: 1; height: 5px; border-radius: 99px; background: var(--line); overflow: hidden; }
+.check-progress .bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--wifi), var(--clk)); transition: width .3s ease; }
+.check-progress b { font: 650 11px var(--mono); color: var(--muted); }
+.lab-grid { display: grid; grid-template-columns: 1.1fr .9fr; gap: 18px; align-items: start; }
+.link-list { display: grid; gap: 8px; margin-top: 4px; }
+.link-list a { display: flex; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; text-decoration: none; color: var(--muted); font-size: 13px; background: var(--bg-soft); transition: border-color .18s, color .18s; }
+.link-list a:hover { border-color: var(--line-strong); color: var(--text); }
+.link-list code { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+
+/* ============================================================ footer + toast */
+.footer { border-top: 1px solid var(--line-soft); padding: 34px 0 46px; color: var(--faint); font-size: 12.5px; }
+.footer-inner { display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; align-items: center; }
+.footer a { color: var(--muted); text-decoration: none; border-bottom: 1px solid var(--line-strong); }
+.footer a:hover { color: var(--text); }
+.toast {
+  position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 14px);
+  padding: 10px 16px; border-radius: 999px; border: 1px solid var(--line-strong);
+  background: var(--panel-strong); color: var(--text); font-size: 13px;
+  box-shadow: var(--shadow); opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 90;
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* ============================================================ responsive */
+@media (max-width: 1040px) {
+  .hero { grid-template-columns: 1fr; gap: 34px; padding-top: 54px; }
+  .hero-art { max-width: 660px; }
+  .medium-grid, .lane-layout, .timing-layout, .lab-grid { grid-template-columns: 1fr; }
+  .builder-grid { grid-template-columns: 300px 1fr; }
+  .const-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 820px) {
+  .diagram-scroll .wiring { min-width: 680px; }
+  .bits-hint { display: block; }
+  .wrap { width: min(1180px, calc(100% - 32px)); }
+  .section { padding: 68px 0; }
+  .nav { order: 3; flex: 1 1 100%; height: 42px; margin-left: 0; }
+  .topbar-inner { flex-wrap: wrap; height: auto; padding: 10px 0 0; gap: 8px; }
+  .topbar-actions { margin-left: auto; }
+  .builder-grid { grid-template-columns: 1fr; }
+  .builder-controls { border-right: 0; border-bottom: 1px solid var(--line); }
+  .sim-lower { grid-template-columns: 1fr; }
+  .sim-log-wrap { border-right: 0; border-bottom: 1px solid var(--line); }
+  .stage { grid-template-columns: 1fr; }
+  .board-chip { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; text-align: left; }
+  .board-chip .b-role { margin-top: 0; }
+  .board-chip .b-state { margin-top: 0; text-align: right; }
+  .wire-scene { order: -1; }
+  .fsm-layout { grid-template-columns: 1fr; }
+  .phase-cards { grid-template-columns: repeat(2, 1fr); }
+  .trace-axis { margin-left: 0; }
+  .trace-wrap { grid-template-columns: 1fr; }
+  .trace-side { display: none; }
+  .const-grid { grid-template-columns: 1fr 1fr; }
+  .dupe-flow { grid-template-columns: 1fr; }
+  .dupe-arrow { transform: rotate(90deg); text-align: center; }
+  .grid-2, .grid-3 { grid-template-columns: 1fr; }
+}
+@media (max-width: 520px) {
+  .hero-art .pin-label, .hero-art .signal-label, .hero-art .board-sub { display: none; }
+  .hero-art .board-title { font-size: 16px; }
+  .sim-controls .field-group, .sim-controls .field-group.wide { min-width: 100%; }
+  .sim-controls { width: 100%; }
+  .const-grid { grid-template-columns: 1fr; }
+  .inline-fields { grid-template-columns: 1fr; }
+  .phase-cards { grid-template-columns: 1fr; }
+  .hero-meta { gap: 8px 14px; }
+  .section { padding: 56px 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+  .reveal { opacity: 1; transform: none; }
+}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="wrap topbar-inner">
+    <a class="brand" href="#overview" aria-label="Dual-medium PHY field guide, back to top">
+      <svg class="brand-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+        <path d="M4 8h10M18 8h10" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+        <path d="M4 16h7M15 16h13" stroke="var(--ir)" stroke-width="2.4" stroke-linecap="round"/>
+        <path d="M4 24h16M24 24h4" stroke="var(--wifi)" stroke-width="2.4" stroke-linecap="round"/>
+        <circle cx="16" cy="8" r="2.4" fill="currentColor"/>
+        <circle cx="13" cy="16" r="2.4" fill="var(--ir)"/>
+        <circle cx="22" cy="24" r="2.4" fill="var(--wifi)"/>
+      </svg>
+      PHY<span class="brand-dim">·</span>field guide
+    </a>
+    <nav class="nav" aria-label="Sections">
+      <a href="#medium">Medium</a>
+      <a href="#frame">Frame</a>
+      <a href="#lanes">Lanes</a>
+      <a href="#timing">Timing</a>
+      <a href="#handshake">Transfer</a>
+      <a href="#reliability">Reliability</a>
+      <a href="#states">States</a>
+      <a href="#lab">Lab</a>
+    </nav>
+    <div class="topbar-actions">
+      <button class="icon-btn" id="theme-toggle" type="button" aria-label="Switch colour theme" aria-pressed="false">
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="4.2" stroke="currentColor" stroke-width="1.7"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.2 5.2l1.4 1.4M17.4 17.4l1.4 1.4M18.8 5.2l-1.4 1.4M6.6 17.4l-1.4 1.4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+  <!-- ======================================================== hero -->
+  <section id="overview" class="hero wrap">
+    <div class="hero-copy reveal">
+      <p class="eyebrow">Dual-medium ESP32 PHY · v1.0</p>
+      <h1>One frame.<br><span class="grad">Two data media.</span><br>Eighteen beats.</h1>
+      <p class="lede">
+        A 36-bit frame is split bit-by-bit across an infrared link and a one-bit-per-packet
+        ESP-NOW lane, paced by a wired clock. This field guide animates every layer: the GPIO
+        wiring, the frame bits, the lane interleave, the acknowledge exchange and the retry that
+        saves a corrupted byte.
+      </p>
+      <div class="hero-actions">
+        <a class="btn primary" href="#frame">Build a frame</a>
+        <a class="btn" href="#handshake">Watch a transfer</a>
+      </div>
+      <div class="hero-meta" aria-label="Protocol at a glance">
+        <span><b>36</b> bits / frame</span>
+        <span><b>18</b> clock cycles</span>
+        <span><b>2</b> data lanes</span>
+        <span><b>3</b> retries</span>
+      </div>
+    </div>
+
+    <div class="hero-art card reveal">
+      <svg viewBox="0 0 760 430" role="img" aria-label="Two ESP32 boards linked crosswise by two clock wires, two infrared paths and one ESP-NOW radio link">
+        <defs>
+          <marker id="hero-arrow-clk" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="var(--clk)"/></marker>
+          <marker id="hero-arrow-ir" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="var(--ir)"/></marker>
+        </defs>
+
+        <rect class="board-rect" x="38" y="112" width="160" height="220" rx="18"/>
+        <rect class="board-rect" x="562" y="112" width="160" height="220" rx="18"/>
+        <text class="board-title" x="58" y="142">ESP32 · A</text>
+        <text class="board-title" x="582" y="142">ESP32 · B</text>
+        <text class="board-sub" x="58" y="158">originator at boot</text>
+        <text class="board-sub" x="582" y="158">responder at boot</text>
+
+        <g aria-hidden="true">
+          <text class="pin-label" x="58" y="194">GPIO18 · IR TX</text>
+          <text class="pin-label" x="58" y="236">GPIO26 · IR RX</text>
+          <text class="pin-label" x="58" y="294">GPIO23 · CLK TX</text>
+          <text class="pin-label" x="58" y="326">GPIO22 · CLK RX</text>
+          <text class="pin-label" x="582" y="194">IR TX · GPIO18</text>
+          <text class="pin-label" x="582" y="236">IR RX · GPIO26</text>
+          <text class="pin-label" x="582" y="294">CLK TX · GPIO23</text>
+          <text class="pin-label" x="582" y="326">CLK RX · GPIO22</text>
+          <circle class="pin-dot ir" cx="198" cy="188" r="3.2"/>
+          <circle class="pin-dot ir" cx="198" cy="230" r="3.2"/>
+          <circle class="pin-dot clk" cx="198" cy="288" r="3.2"/>
+          <circle class="pin-dot clk" cx="198" cy="320" r="3.2"/>
+          <circle class="pin-dot ir" cx="562" cy="188" r="3.2"/>
+          <circle class="pin-dot ir" cx="562" cy="230" r="3.2"/>
+          <circle class="pin-dot clk" cx="562" cy="288" r="3.2"/>
+          <circle class="pin-dot clk" cx="562" cy="320" r="3.2"/>
+        </g>
+
+        <!-- clock wires, crosswise -->
+        <g aria-hidden="true">
+          <path id="hero-clk-ab" class="wire-line clk flow" d="M198 288 C320 288 440 320 562 320" marker-end="url(#hero-arrow-clk)"/>
+          <path id="hero-clk-ba" class="wire-line clk flow flow-slow" d="M562 288 C440 288 320 320 198 320" marker-end="url(#hero-arrow-clk)" opacity=".72"/>
+          <text class="signal-label clk" x="380" y="286">CLK_TX → CLK_RX</text>
+          <circle class="motion-dot" r="3.4"><animateMotion dur="3.4s" repeatCount="indefinite"><mpath href="#hero-clk-ab"/></animateMotion></circle>
+          <circle class="motion-dot" r="3.4" opacity=".8"><animateMotion dur="4.2s" repeatCount="indefinite"><mpath href="#hero-clk-ba"/></animateMotion></circle>
+        </g>
+
+        <!-- infrared, both directions -->
+        <g aria-hidden="true">
+          <path id="hero-ir-ab" class="wire-line ir flow" d="M198 188 C300 66 460 66 562 230" marker-end="url(#hero-arrow-ir)"/>
+          <path id="hero-ir-ba" class="wire-line ir flow flow-slow" d="M562 188 C460 96 300 96 198 230" marker-end="url(#hero-arrow-ir)" opacity=".62"/>
+          <text class="signal-label ir" x="342" y="78">IR · one bit / cycle</text>
+          <circle class="motion-dot ir" r="3.2"><animateMotion dur="4s" repeatCount="indefinite"><mpath href="#hero-ir-ab"/></animateMotion></circle>
+          <circle class="motion-dot ir" r="3.2" opacity=".7"><animateMotion dur="4.8s" repeatCount="indefinite"><mpath href="#hero-ir-ba"/></animateMotion></circle>
+        </g>
+
+        <!-- esp-now -->
+        <g aria-hidden="true">
+          <path class="wire-line wifi" d="M250 380 L510 380" marker-start="url(#hero-arrow-clk)" marker-end="url(#hero-arrow-clk)" opacity=".7"/>
+          <path d="M350 360c15-20 50-20 65 0M335 348c25-34 75-34 100 0M320 336c34-48 100-48 134 0" fill="none" stroke="var(--wifi)" stroke-width="1.3" opacity=".5"/>
+          <text class="signal-label wifi" x="380" y="400" text-anchor="middle">ESP-NOW · 1 bit / packet</text>
+
+          <path class="wire-line gnd" d="M118 332 L118 418 L642 418 L642 332"/>
+          <text class="signal-label gnd" x="380" y="432" text-anchor="middle">common GND</text>
+        </g>
+      </svg>
+      <div class="hero-caption">
+        <span class="legend-item ir"><i></i> infrared lane</span>
+        <span class="legend-item wifi"><i></i> ESP-NOW lane</span>
+        <span class="legend-item clk"><i></i> wired clock</span>
+        <span class="legend-item gnd"><i></i> ground reference</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================== medium -->
+  <section id="medium" class="section">
+    <div class="wrap">
+      <header class="section-head reveal">
+        <p class="eyebrow">01 · Physical medium</p>
+        <h2>Two boards, three channels</h2>
+        <p class="lede">
+          Every board has the same pinout. Each direction gets its own clock wire and its own
+          infrared path; the radio carries the second bit of every pair. The clock is not a
+          free-running oscillator — it is generated per cycle by whichever board is transmitting.
+        </p>
+      </header>
+
+      <div class="medium-grid">
+        <div class="card diagram-card reveal">
+          <div class="diagram-toolbar">
+            <div class="chip-row" role="group" aria-label="Highlight a channel in the wiring diagram">
+              <button class="chip is-on" type="button" data-channel="all" aria-pressed="true">All channels</button>
+              <button class="chip" type="button" data-channel="clk" aria-pressed="false">Wired clock</button>
+              <button class="chip" type="button" data-channel="ir" aria-pressed="false">Infrared</button>
+              <button class="chip" type="button" data-channel="wifi" aria-pressed="false">ESP-NOW</button>
+            </div>
+            <span class="badge">same pinout on both ESP32s</span>
+          </div>
+
+          <div class="diagram-scroll">
+          <svg class="wiring" id="wiring" data-focus="all" viewBox="0 0 900 480" role="img" aria-label="Wiring diagram. Clock TX on GPIO23 of each board crosses to clock RX on GPIO22 of the other. Infrared TX on GPIO18 faces the other board's GPIO26 receiver. ESP-NOW uses the built-in radio. Both boards share ground.">
+            <defs>
+              <marker id="w-arrow-clk" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="var(--clk)"/></marker>
+              <marker id="w-arrow-ir" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="var(--ir)"/></marker>
+              <marker id="w-arrow-wifi" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="var(--wifi)"/></marker>
+            </defs>
+
+            <g class="ch-board">
+              <rect class="board-rect" x="42" y="66" width="218" height="312" rx="20"/>
+              <rect class="board-rect" x="640" y="66" width="218" height="312" rx="20"/>
+              <text class="board-title" x="64" y="98">ESP32-WROOM · A</text>
+              <text class="board-title" x="662" y="98">ESP32-WROOM · B</text>
+              <text class="board-sub" x="64" y="114">DATA originator at boot</text>
+              <text class="board-sub" x="662" y="114">responder at boot</text>
+            </g>
+
+            <g class="ch-ir">
+              <text class="pin-label" x="64" y="148">GPIO18 · IR TX</text>
+              <text class="pin-label" x="64" y="196">GPIO26 · IR RX</text>
+              <text class="pin-label" x="662" y="148">GPIO18 · IR TX</text>
+              <text class="pin-label" x="662" y="196">GPIO26 · IR RX</text>
+              <circle class="pin-dot ir" cx="260" cy="142" r="3.6"/>
+              <circle class="pin-dot ir" cx="260" cy="190" r="3.6"/>
+              <circle class="pin-dot ir" cx="640" cy="142" r="3.6"/>
+              <circle class="pin-dot ir" cx="640" cy="190" r="3.6"/>
+              <path class="wire-line ir flow" d="M260 142 C360 24 540 34 640 190" marker-end="url(#w-arrow-ir)"/>
+              <path class="wire-line ir flow flow-slow" d="M640 142 C540 64 360 74 260 190" marker-end="url(#w-arrow-ir)" opacity=".62"/>
+              <text class="signal-label ir" x="450" y="168" text-anchor="middle">IR emitter → detector</text>
+              <text class="signal-label ir" x="450" y="186" text-anchor="middle" opacity=".65">both directions, one bit per clock</text>
+            </g>
+
+            <g class="ch-clk">
+              <text class="pin-label" x="64" y="278">GPIO23 · CLK TX</text>
+              <text class="pin-label" x="64" y="326">GPIO22 · CLK RX</text>
+              <text class="pin-label" x="662" y="278">GPIO23 · CLK TX</text>
+              <text class="pin-label" x="662" y="326">GPIO22 · CLK RX</text>
+              <circle class="pin-dot clk" cx="260" cy="272" r="3.6"/>
+              <circle class="pin-dot clk" cx="260" cy="320" r="3.6"/>
+              <circle class="pin-dot clk" cx="640" cy="272" r="3.6"/>
+              <circle class="pin-dot clk" cx="640" cy="320" r="3.6"/>
+              <path class="wire-line clk flow" d="M260 272 C380 272 520 320 640 320" marker-end="url(#w-arrow-clk)"/>
+              <path class="wire-line clk flow flow-slow" d="M640 272 C520 272 380 320 260 320" marker-end="url(#w-arrow-clk)" opacity=".72"/>
+              <text class="signal-label clk" x="450" y="268" text-anchor="middle">crossed clock: TX → RX</text>
+              <text class="signal-label clk" x="450" y="338" text-anchor="middle" opacity=".65">18 rising edges per frame</text>
+            </g>
+
+            <g class="ch-wifi">
+              <path class="wire-line wifi" d="M300 408 L600 408" marker-start="url(#w-arrow-wifi)" marker-end="url(#w-arrow-wifi)"/>
+              <path d="M390 392c18-24 60-24 78 0M372 379c30-41 90-41 120 0M354 366c42-58 126-58 168 0" fill="none" stroke="var(--wifi)" stroke-width="1.3" opacity=".5"/>
+              <text class="signal-label wifi" x="450" y="430" text-anchor="middle">ESP-NOW · 2.4 GHz · one 7-byte packet per lane bit</text>
+            </g>
+
+            <g class="ch-gnd">
+              <path class="wire-line gnd" d="M151 378 L151 456 L749 456 L749 378"/>
+              <text class="signal-label gnd" x="450" y="470" text-anchor="middle">common ground — required for the wired clock reference</text>
+            </g>
+          </svg>
+          </div>
+          <p class="caption">Click a channel above to isolate it. Clock wires must cross; an output never meets another output. On a narrow screen, swipe the diagram to pan.</p>
+        </div>
+
+        <div class="stack">
+          <article class="card channel-card reveal" data-channel-card="clk">
+            <h3><span class="badge clk">clock</span> The wired metronome</h3>
+            <p>
+              GPIO23 is a push-pull output, LOW when idle. A transmitter raises it for 2 ms once per
+              bit pair. The peer's GPIO22 sees a rising edge and samples the optical bit at that
+              instant. Exactly 18 edges define one frame.
+            </p>
+            <div class="pin-row"><span class="pin-badge">A23 → B22</span><span class="pin-badge">B23 → A22</span><span class="pin-badge">idle LOW</span></div>
+          </article>
+
+          <article class="card channel-card reveal" data-channel-card="ir">
+            <h3><span class="badge ir">infrared</span> One logical level, one wire</h3>
+            <p>
+              GPIO18 drives an emitter through a transistor; GPIO26 reads a conditioned detector.
+              The logical level must be stable when the clock edge arrives. A 38 kHz demodulating
+              receiver needs timed bursts, not a static level — measure the real front end.
+            </p>
+            <div class="pin-row"><span class="pin-badge">GPIO18 out</span><span class="pin-badge">GPIO26 in</span><span class="pin-badge">polarity measured</span></div>
+          </article>
+
+          <article class="card channel-card reveal" data-channel-card="wifi">
+            <h3><span class="badge wifi">ESP-NOW</span> A packet that carries one bit</h3>
+            <p>
+              Each cycle sends exactly one ESP-NOW application message. Its 7-byte envelope carries
+              session, frame sequence, cycle index and the single lane bit. The whole 36-bit frame is
+              never packed into one packet.
+            </p>
+            <div class="pin-row"><span class="pin-badge">station mode</span><span class="pin-badge">fixed channel</span><span class="pin-badge">peer MAC</span></div>
+          </article>
+        </div>
+      </div>
+
+      <div class="callout medium-note reveal">
+        <span class="callout-icon">!</span>
+        <div>
+          <strong>Wiring rules that prevent damage.</strong> Connect clock TX only to the peer's clock RX
+          (never TX to TX), share ground, and do not tie the two 3.3 V rails together. Drive IR LEDs through
+          a transistor with current limiting, keep clock wires short, and add 220–1000 Ω series resistors as
+          a first lab precaution.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================== frame -->
+  <section id="frame" class="section">
+    <div class="wrap">
+      <header class="section-head reveal">
+        <p class="eyebrow">02 · Frame anatomy</p>
+        <h2>A 36-bit sentence, field by field</h2>
+        <p class="lede">
+          SYN and SFD open the frame, a 4-bit CONTROL names the type, DATA carries a byte (or a NACK
+          reason), and CRC-8 protects CONTROL + DATA. Build one below; every other panel on this page follows
+          your choice.
+        </p>
+      </header>
+
+      <div class="card builder reveal">
+        <div class="builder-grid">
+          <div class="builder-controls">
+            <label class="control-label" id="type-label">Frame type</label>
+            <div class="seg" id="type-seg" role="group" aria-labelledby="type-label">
+              <button type="button" data-type="DATA" aria-pressed="true">DATA</button>
+              <button type="button" data-type="ACK" aria-pressed="false">ACK</button>
+              <button type="button" data-type="NACK" aria-pressed="false">NACK</button>
+              <button type="button" data-type="TURN" aria-pressed="false">TURN</button>
+              <button type="button" data-type="END" aria-pressed="false">END</button>
+            </div>
+
+            <div id="data-field-wrap">
+              <label class="control-label" for="data-input">DATA byte</label>
+              <div class="input-row">
+                <input id="data-input" class="input" type="text" value="0x41" spellcheck="false" autocomplete="off" inputmode="text" aria-describedby="data-help">
+                <span class="char-readout" id="char-readout" aria-live="polite">'A'</span>
+              </div>
+              <p class="micro" id="data-help" style="margin-top:6px">Hex 0x00–0xFF. A text byte becomes one DATA frame.</p>
+              <div class="chip-row" id="data-presets" style="margin-top:10px">
+                <button class="chip" type="button" data-data="0x00">0x00</button>
+                <button class="chip" type="button" data-data="0x41">'A'</button>
+                <button class="chip" type="button" data-data="0x55">0x55</button>
+                <button class="chip" type="button" data-data="0xAA">0xAA</button>
+                <button class="chip" type="button" data-data="0xFF">0xFF</button>
+              </div>
+            </div>
+
+            <div id="reason-wrap" hidden>
+              <label class="control-label" for="reason-select">NACK reason</label>
+              <select id="reason-select" class="input">
+                <option value="1">0x01 · CRC</option>
+                <option value="2">0x02 · invalid framing</option>
+                <option value="3" selected>0x03 · missing lane bit</option>
+                <option value="4">0x04 · timeout</option>
+                <option value="5">0x05 · unexpected state</option>
+                <option value="6">0x06 · unsupported type</option>
+              </select>
+            </div>
+            <p class="micro" id="reserved-note" hidden style="margin-top:12px">DATA is reserved <code style="font-family:var(--mono)">0x00</code> for ACK, TURN and END. Correlation uses the sequence number, not a payload value.</p>
+
+            <label class="control-label" for="crc-profile">CRC profile</label>
+            <select id="crc-profile" class="input">
+              <option value="smbus" selected>CRC-8/SMBUS · poly 0x07</option>
+              <option value="autosar">CRC-8/AUTOSAR · poly 0x2F</option>
+              <option value="sae-j1850">CRC-8/SAE-J1850 · poly 0x1D</option>
+              <option value="maxim-dow">CRC-8/MAXIM-DOW · poly 0x31</option>
+            </select>
+            <p class="micro" style="margin-top:8px">Both boards must be built with the same profile. v1.0 wire default is SMBUS.</p>
+          </div>
+
+          <div class="builder-output">
+            <div class="toolbar-line">
+              <div class="frame-summary" id="frame-summary" aria-live="polite"></div>
+              <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap">
+                <label class="check"><input type="checkbox" id="show-indices"> bit indices</label>
+                <button class="btn small" type="button" id="copy-bits">Copy 36 bits</button>
+              </div>
+            </div>
+
+            <div class="bits-scroll">
+              <div class="bits-strip" id="frame-bits"></div>
+            </div>
+            <p class="micro bits-hint">Swipe the bit strip sideways to see all five fields.</p>
+
+            <div class="code-line" id="crc-line"></div>
+
+            <div class="field-detail inset" id="field-detail">
+              <h4><span id="detail-title">SYN</span> <span class="badge" id="detail-badge">training</span></h4>
+              <p id="detail-text">Hover or click a field or a bit to inspect it.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-3" style="margin-top:18px">
+        <div class="card inset reveal">
+          <h3 style="font-size:15px">Most significant bit first</h3>
+          <p class="micro" style="margin-top:8px">Within every field the leftmost bit is sent first. The 36 serialized bits are paired in order — no field is reordered between lanes.</p>
+        </div>
+        <div class="card inset reveal">
+          <h3 style="font-size:15px">CONTROL is 4 bits</h3>
+          <p class="micro" style="margin-top:8px">Only 0x1–0x5 are valid. ACK, TURN and END reserve DATA = 0x00; NACK uses DATA as its reason code.</p>
+        </div>
+        <div class="card inset reveal">
+          <h3 style="font-size:15px">CRC covers two bytes</h3>
+          <p class="micro" style="margin-top:8px">CRC-8 is computed over <code style="font-family:var(--mono)">[CONTROL &amp; 0x0F, DATA]</code> only. SYN, SFD and the CRC byte itself are excluded.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================== lanes -->
+  <section id="lanes" class="section">
+    <div class="wrap">
+      <header class="section-head reveal">
+        <p class="eyebrow">03 · Lane interleave</p>
+        <h2>IR takes the even bits, ESP-NOW the odd</h2>
+        <p class="lede">
+          Pair sequential bits, not blocks. Cycle <code style="font-family:var(--mono)">k</code> carries logical
+          bit <code style="font-family:var(--mono)">2k</code> on infrared and <code style="font-family:var(--mono)">2k+1</code>
+          on ESP-NOW. The receiver rebuilds every pair in IR-then-ESP-NOW order.
+        </p>
+      </header>
+
+      <div class="lane-layout">
+        <div class="card lane-card reveal">
+          <div class="lane-toolbar">
+            <button class="btn small" type="button" id="lane-play">Animate pairing</button>
+            <button class="btn small" type="button" id="lane-reset">Reset</button>
+            <label class="check"><input type="checkbox" id="lane-wrong-toggle"> show the wrong de-interleave</label>
+          </div>
+          <div class="lane-row-labels">
+            <span class="legend-item ir"><i></i> IR lane · bit 2k</span>
+            <span class="legend-item wifi"><i></i> ESP-NOW lane · bit 2k+1</span>
+            <span class="legend-item gnd"><i></i> pair, reconstructed IR first</span>
+          </div>
+          <div class="lane-scroll">
+            <div class="lane-grid" id="lane-grid" aria-label="Eighteen cycles with one IR bit and one ESP-NOW bit each"></div>
+          </div>
+          <p class="caption">This is the frame from the builder above. Click any bit there to jump to its cycle.</p>
+        </div>
+
+        <div class="stack">
+          <div class="card reveal">
+            <h3 style="font-size:15px">Reconstruction</h3>
+            <div class="decode-box" id="lane-decode" style="margin-top:12px"></div>
+            <div class="wrong-box" id="wrong-box" hidden>
+              <h4>What if you concatenated lanes instead?</h4>
+              <p>
+                18 IR bits followed by 18 ESP-NOW bits is <em>not</em> the frame. The resulting stream
+                cannot produce the SYN/SFD pattern:
+              </p>
+              <p class="mono-break" id="wrong-bits"></p>
+              <p><span class="status-pill bad" id="wrong-status">BAD_FRAMING</span></p>
+              <p id="wrong-explain"></p>
+            </div>
+          </div>
+          <div class="card inset reveal">
+            <p class="micro">
+              A missing lane packet leaves its cycle slot empty. It never shifts later bits left; the
+              transaction either times out or answers NACK 0x03.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================== timing -->
+  <section id="timing" class="section">
+    <div class="wrap">
+      <header class="section-head reveal">
+        <p class="eyebrow">04 · Cycle pacing</p>
+        <h2>The clock waits for the radio</h2>
+        <p class="lede">
+          There is no periodic 500 Hz clock. The transmitter asserts the IR symbol, submits one ESP-NOW
+          packet, waits for its local send callback and a guard interval, then pulses CLK_TX. The receiver
+          joins late packets by cycle index, so the edge may precede or follow the packet.
+        </p>
+      </header>
+
+      <div class="timing-layout">
+        <div class="card reveal">
+          <div class="timing-controls">
+            <div class="control-group">
+              <div>
+                <label for="cycle-select">Example cycle</label>
+                <input type="range" id="cycle-select" min="0" max="17" value="10" step="1">
+              </div>
+              <span class="badge" id="cycle-label">cycle 10</span>
+            </div>
+            <div class="control-group">
+              <button class="btn small" type="button" id="timing-play">Play</button>
+              <button class="btn small" type="button" id="timing-step">Step</button>
+              <button class="btn small" type="button" id="timing-reset">Reset</button>
+              <div>
+                <label for="timing-speed">Speed</label>
+                <select id="timing-speed" class="select-compact">
+                  <option value="0.6">0.6×</option>
+                  <option value="1" selected>1×</option>
+                  <option value="1.8">1.8×</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="cycle-echo">
+            <span>Cycle <b id="cycle-num">10</b> carries</span>
+            <span class="ir"><i class="swatch"></i> IR <b id="cycle-ir">0</b></span>
+            <span class="wifi"><i class="swatch"></i> ESP-NOW <b id="cycle-wifi">1</b></span>
+            <span>for bit pair <b id="cycle-pair">01</b></span>
+          </div>
+
+          <div class="trace-axis" aria-hidden="true">
+            <span>IR setup</span><span>ESP-NOW send</span><span>guard</span><span>CLK high</span><span>CLK low</span>
+          </div>
+          <div class="trace-wrap">
+            <div class="trace-side" aria-hidden="true"><span>IR</span><span>ESP-NOW</span><span>CLK</span></div>
+            <div class="trace-plot" id="trace-plot">
+              <div class="trace-row ir" data-row="ir">
+                <div class="trace-cell setup is-active"></div><div class="trace-cell send"></div><div class="trace-cell guard"></div><div class="trace-cell high"></div><div class="trace-cell low"></div>
+              </div>
+              <div class="trace-row wifi" data-row="wifi">
+                <div class="trace-cell setup"></div><div class="trace-cell send"><span class="packet-dots"><i></i><i></i><i></i></span></div><div class="trace-cell guard"></div><div class="trace-cell high"></div><div class="trace-cell low"></div>
+              </div>
+              <div class="trace-row clk" data-row="clk">
+                <div class="trace-cell setup"></div><div class="trace-cell send"></div><div class="trace-cell guard"></div><div class="trace-cell high"></div><div class="trace-cell low low-after"></div>
+              </div>
+              <div class="playhead" id="playhead" aria-hidden="true"></div>
+            </div>
+          </div>
+
+          <div class="phase-cards" id="phase-cards">
+            <button class="phase-card is-active" type="button" data-phase="0" style="--phase: var(--ir)">
+              <span class="p-name">IR setup</span><span class="p-time">2 ms</span><span class="p-note">logical symbol stable before the edge</span>
+            </button>
+            <button class="phase-card" type="button" data-phase="1" style="--phase: var(--wifi)">
+              <span class="p-name">ESP-NOW</span><span class="p-time">≤250 ms</span><span class="p-note">one packet; wait for local send callback</span>
+            </button>
+            <button class="phase-card" type="button" data-phase="2" style="--phase: var(--amber)">
+              <span class="p-name">guard</span><span class="p-time">10 ms</span><span class="p-note">airtime margin after submission</span>
+            </button>
+            <button class="phase-card" type="button" data-phase="3" style="--phase: var(--clk)">
+              <span class="p-name">CLK high</span><span class="p-time">2 ms</span><span class="p-note">peer samples IR at the edge</span>
+            </button>
+            <button class="phase-card" type="button" data-phase="4" style="--phase: var(--clk)">
+              <span class="p-name">CLK low</span><span class="p-time">≥2 ms</span><span class="p-note">quiet gap before the next pair</span>
+            </button>
+          </div>
+          <p class="micro" style="margin-top:12px">
+            The drawing is schematic: widths are not proportional to milliseconds. A 2 ms pulse does not
+            mean 500 Hz throughput — Wi-Fi airtime dominates.
+          </p>
+        </div>
+
+        <div class="stack">
+          <div class="card reveal">
+            <h3 style="font-size:15px">Lower-bound calculator</h3>
+            <p class="micro" style="margin-top:6px">Ignores Wi-Fi airtime unless you enter an observed send latency. It is a budget, not a measurement.</p>
+            <div class="budget-grid" style="margin-top:12px">
+              <div><label class="control-label as-is" for="b-ir">IR setup (µs)</label><input id="b-ir" type="number" value="2000" min="0" step="100"></div>
+              <div><label class="control-label as-is" for="b-send">Send latency (ms)</label><input id="b-send" type="number" value="0" min="0" step="1"></div>
+              <div><label class="control-label as-is" for="b-guard">Guard (ms)</label><input id="b-guard" type="number" value="10" min="0" step="1"></div>
+              <div><label class="control-label as-is" for="b-high">CLK high (µs)</label><input id="b-high" type="number" value="2000" min="0" step="100"></div>
+              <div><label class="control-label as-is" for="b-low">CLK low (µs)</label><input id="b-low" type="number" value="2000" min="0" step="100"></div>
+            </div>
+            <div class="budget-out">
+              <strong id="budget-cycle">16.0 ms</strong>
+              <span>per cycle minimum</span>
+              <div class="micro" style="margin-top:10px">One frame: <b id="budget-frame" style="color:var(--text)">288 ms</b> for 18 cycles</div>
+            </div>
+            <p class="micro" style="margin-top:12px">Other defaults: 10 s frame timeout, 100 ms lane settle, 20 ms response guard, 3 retransmissions.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================== handshake -->
+  <section id="handshake" class="section">
+    <div class="wrap">
+      <header class="section-head reveal">
+        <p class="eyebrow">05 · Request / response</p>
+        <h2>Watch a message cross the link</h2>
+        <p class="lede">
+          One byte at a time: 18 cycles forward, a complete ACK frame back. Pick a scenario to inject a
+          corrupted bit, a lost ACK, a missing lane packet or a retry limit — and watch the sequence
+          numbers keep delivery exactly once.
+        </p>
+      </header>
+
+      <div class="card sim reveal">
+        <div class="sim-top">
+          <div class="sim-controls">
+            <div class="field-group wide">
+              <label class="control-label" style="margin-top:0" for="sim-message">Message from A</label>
+              <input id="sim-message" class="input" type="text" value="hello" maxlength="12" autocomplete="off">
+            </div>
+            <div class="field-group wide">
+              <label class="control-label" style="margin-top:0" for="sim-scenario">Scenario</label>
+              <select id="sim-scenario" class="input">
+                <option value="clean" selected>Clean link</option>
+                <option value="nack">Corrupt a bit → NACK + retry</option>
+                <option value="dropack">Lose an ACK → duplicate suppression</option>
+                <option value="missing">Drop a lane bit → NACK 0x03</option>
+                <option value="exhaust">Retries exhausted → LINK_ERROR</option>
+                <option value="turn">TURN handoff → B replies</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label class="control-label" style="margin-top:0" for="sim-speed">Speed</label>
+              <select id="sim-speed" class="select-compact">
+                <option value="0.5">0.5×</option>
+                <option value="1">1×</option>
+                <option value="2" selected>2×</option>
+              </select>
+            </div>
+            <button class="btn primary" type="button" id="sim-play">Play</button>
+            <button class="btn small" type="button" id="sim-step">Step</button>
+            <button class="btn small" type="button" id="sim-reset">Reset</button>
+          </div>
+          <div class="sim-badges">
+            <span class="sim-badge owner-a">originator <b id="owner-badge">A</b></span>
+            <span class="sim-badge">seq <b id="sim-seq">—</b></span>
+            <span class="sim-badge">attempt <b id="sim-attempt">—</b></span>
+          </div>
+        </div>
+
+        <p class="sim-note" id="sim-scenario-note" style="padding:12px 22px 0; margin:0"></p>
+
+        <div class="stage">
+          <div class="board-chip is-owner" id="board-a">
+            <span class="b-name">A</span>
+            <span class="b-role">originator</span>
+            <span class="b-state" id="state-a">LINK_IDLE</span>
+          </div>
+          <div class="wire-scene" id="wire-scene" aria-hidden="true">
+            <div class="wire-row" data-wire="ir"><span>IR</span><div class="track"><i class="pulse"></i></div></div>
+            <div class="wire-row" data-wire="wifi"><span>ESP-NOW</span><div class="track"><i class="pulse"></i></div></div>
+            <div class="wire-row" data-wire="clk"><span>CLK</span><div class="track"><i class="pulse"></i></div></div>
+            <div class="cycle-readout">cycle <b id="sim-cycle">00</b> / 18</div>
+          </div>
+          <div class="board-chip" id="board-b">
+            <span class="b-name">B</span>
+            <span class="b-role">responder</span>
+            <span class="b-state" id="state-b">LINK_IDLE</span>
+          </div>
+        </div>
+
+        <div class="sim-progress"><i id="sim-progress-bar"></i></div>
+
+        <div class="sim-lower">
+          <div class="sim-log-wrap">
+            <h3>Protocol log</h3>
+            <ol class="sim-log" id="sim-log" aria-live="polite"></ol>
+          </div>
+          <div class="sim-result-panel">
+            <h3>Delivered payloads</h3>
+            <div class="received" id="sim-received"><p class="recv-empty">Nothing delivered yet.</p></div>
+            <p class="sim-verdict" id="sim-verdict">Press Play or Step through the exchange.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-3" style="margin-top:18px">
+        <div class="card inset reveal">
+          <h3 style="font-size:15px">A full ACK is a frame</h3>
+          <p class="micro" style="margin-top:8px">ACK and NACK travel on both data lanes with the receiver's own clock — all 36 bits, not a single ESP-NOW control packet.</p>
+        </div>
+        <div class="card inset reveal">
+          <h3 style="font-size:15px">Same sequence on retry</h3>
+          <p class="micro" style="margin-top:8px">A retransmission keeps <code style="font-family:var(--mono)">frame_seq</code>. The responder recognises the duplicate and re-sends its cached ACK.</p>
+        </div>
+        <div class="card inset reveal">
+          <h3 style="font-size:15px">No ACK of ACK</h3>
+          <p class="micro" style="margin-top:8px">Responses are never acknowledged. A lost ACK is recovered by the sender's timeout and retry, not by an infinite reply loop.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================== reliability -->
+  <section id="reliability" class="section">
+    <div class="wrap">
+      <header class="section-head reveal">
+        <p class="eyebrow">06 · Reliability</p>
+        <h2>One bit per packet, one delivery per sequence</h2>
+        <p class="lede">
+          ESP-NOW is packet-based, so the protocol emulates a lane at the logical level: one packet per
+          cycle carrying a single lane bit plus correlation metadata. ACKs confirm complete frames; a CRC
+          detects corruption but cannot prove perfection.
+        </p>
+      </header>
+
+      <div class="grid-2">
+        <div class="card reveal">
+          <h3>Transport envelope · 7 bytes per lane bit</h3>
+          <p class="micro" style="margin-top:6px">Not part of the 36-bit logical frame. It only prevents delayed or duplicated packets from landing in the wrong cycle.</p>
+          <div class="packet-visual" id="packet-visual" role="group" aria-label="ESP-NOW transport envelope bytes">
+            <button type="button" class="packet-byte" data-byte="0">0x01<span>version</span></button>
+            <button type="button" class="packet-byte" data-byte="1">00 01<span>session</span></button>
+            <button type="button" class="packet-byte" data-byte="2">00 29<span>frame_seq</span></button>
+            <button type="button" class="packet-byte" data-byte="3">0x0A<span>cycle</span></button>
+            <button type="button" class="packet-byte" data-byte="4">0x01<span>lane bit</span></button>
+          </div>
+          <div class="packet-detail" id="packet-detail"><b>7 bytes</b> total per application message: version, big-endian session ID, big-endian frame sequence, cycle index (0–17) and the lane bit (must be 0 or 1). Wi-Fi MAC overhead is additional.</div>
+          <p class="micro" style="margin-top:10px">18 one-bit ESP-NOW messages per full frame. Never one packed frame.</p>
+        </div>
+
+        <div class="card reveal">
+          <h3>Duplicate delivery protection</h3>
+          <p class="micro" style="margin-top:6px">The ACK may be lost after the receiver accepted the DATA. The retry must not print the byte twice.</p>
+          <div class="dupe-flow">
+            <div class="dupe-box"><b>A</b><br>seq 41 · DATA 'h'<br>no ACK → retry</div>
+            <div class="dupe-arrow" aria-hidden="true">→</div>
+            <div class="dupe-box"><b>B cache</b><br>seq 41 accepted<br>re-ACK, no re-delivery</div>
+          </div>
+          <div class="dupe-flow">
+            <div class="dupe-box"><b>B</b><br>prints 'h' once</div>
+            <div class="dupe-arrow" aria-hidden="true">✓</div>
+            <div class="dupe-box"><b>A</b><br>validates ACK<br>commits seq 41</div>
+          </div>
+          <p class="micro" style="margin-top:12px">TURN applies ownership before the ACK is sent; the sender applies it after validating the ACK.</p>
+        </div>
+      </div>
+
+      <div class="grid-2" style="margin-top:18px">
+        <div class="card crc-lab reveal">
+          <div>
+            <h3>CRC-8 lab</h3>
+            <p class="micro" style="margin-top:6px">Type ASCII text to see the profile's check behaviour. For a frame, the input is CONTROL (low nibble) followed by DATA.</p>
+          </div>
+          <div class="inline-fields">
+            <div>
+              <label class="control-label" for="crc-text">Input text</label>
+              <input id="crc-text" class="input" type="text" value="123456789" autocomplete="off">
+            </div>
+            <div>
+              <label class="control-label" for="crc-lab-profile">Profile</label>
+              <select id="crc-lab-profile" class="input">
+                <option value="smbus" selected>CRC-8/SMBUS</option>
+                <option value="autosar">CRC-8/AUTOSAR</option>
+                <option value="sae-j1850">CRC-8/SAE-J1850</option>
+                <option value="maxim-dow">CRC-8/MAXIM-DOW</option>
+              </select>
+            </div>
+          </div>
+          <div class="chip-row">
+            <button class="chip" type="button" data-crc-input="123456789">check value</button>
+            <button class="chip" type="button" data-crc-input="01 41" data-hex="1">frame 01 41</button>
+            <button class="chip" type="button" data-crc-input="02 00" data-hex="1">frame 02 00</button>
+          </div>
+          <div class="crc-result">
+            <span class="crc-value" id="crc-lab-value">0xF4</span>
+            <span class="micro" id="crc-lab-note">CRC-8/SMBUS("123456789") — matches the catalogue check value</span>
+          </div>
+          <div class="crc-params" id="crc-params"></div>
+        </div>
+
+        <div class="card reveal">
+          <h3>What reliability cannot do</h3>
+          <ul class="limits" style="margin-top:12px">
+            <li>CRC-8 detects many corruption patterns but cannot guarantee detection of every one. An ACK confirms frame checks, not mathematical perfection.</li>
+            <li>Infrared ambiguity is usually caught by CRC; a LOW reading is not proof of an erasure — it may be a valid zero.</li>
+            <li>The static v1.0 session ID is a lab convenience. After independent reboots, old packets can collide with reused sequence numbers.</li>
+            <li>There is no parity, no per-bit ACK and no forward error correction. A missing ESP-NOW bit is a missing slot, not something to reconstruct.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================== states -->
+  <section id="states" class="section">
+    <div class="wrap">
+      <header class="section-head reveal">
+        <p class="eyebrow">07 · State machine</p>
+        <h2>One serialized protocol task</h2>
+        <p class="lede">
+          GPIO interrupts and Wi-Fi callbacks only enqueue events. A single task mutates transaction
+          state, so transmission and response can never overlap. Click a state to inspect it.
+        </p>
+      </header>
+
+      <div class="grid-2 fsm-layout">
+        <div class="card fsm-card reveal">
+          <svg class="fsm-svg" id="fsm" viewBox="0 0 960 400" role="img" aria-label="Finite state machine with boot, link idle, transmit, wait for response, receive, validate, respond and link error states">
+            <defs>
+              <marker id="fsm-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" style="fill:var(--faint)"/></marker>
+            </defs>
+            <g>
+              <path class="fsm-edge" d="M115 64 L115 92" marker-end="url(#fsm-arrow)"/>
+              <path class="fsm-edge" d="M115 139 L115 196" marker-end="url(#fsm-arrow)"/>
+              <path class="fsm-edge" d="M200 210 C255 210 252 77 296 77" marker-end="url(#fsm-arrow)"/>
+              <path class="fsm-edge" d="M450 77 L506 77" marker-end="url(#fsm-arrow)"/>
+              <path class="fsm-edge" d="M510 90 C390 118 270 164 196 203" marker-end="url(#fsm-arrow)"/>
+              <path class="fsm-edge dashed" d="M585 51 C560 20 400 20 375 51" marker-end="url(#fsm-arrow)"/>
+              <path class="fsm-edge" d="M660 77 L714 77" marker-end="url(#fsm-arrow)"/>
+              <path class="fsm-edge" d="M200 232 C258 262 264 322 296 322" marker-end="url(#fsm-arrow)"/>
+              <path class="fsm-edge" d="M450 322 L506 322" marker-end="url(#fsm-arrow)"/>
+              <path class="fsm-edge" d="M660 322 L714 322" marker-end="url(#fsm-arrow)"/>
+              <path class="fsm-edge" d="M720 290 C540 274 300 262 196 232" marker-end="url(#fsm-arrow)"/>
+              <text class="fsm-label" x="128" y="86">power on</text>
+              <text class="fsm-label" x="128" y="176">Wi-Fi + peer ready</text>
+              <text class="fsm-label" x="228" y="148">pending request</text>
+              <text class="fsm-label" x="478" y="48" text-anchor="middle">18 pairs</text>
+              <text class="fsm-label" x="300" y="128">ACK</text>
+              <text class="fsm-label" x="448" y="28">NACK / timeout</text>
+              <text class="fsm-label" x="686" y="44" text-anchor="middle">3 retries</text>
+              <text class="fsm-label" x="230" y="288">clock burst</text>
+              <text class="fsm-label" x="466" y="310">18 edges</text>
+              <text class="fsm-label" x="648" y="308" text-anchor="middle">checks pass</text>
+              <text class="fsm-label" x="520" y="256">response finished</text>
+            </g>
+            <g>
+              <g class="fsm-node" data-state="BOOT" tabindex="0" role="button" aria-label="BOOT state"><rect x="40" y="20" width="150" height="44" rx="10"/><text x="115" y="42">BOOT</text></g>
+              <g class="fsm-node" data-state="WIFI_INIT" tabindex="0" role="button" aria-label="WIFI_INIT state"><rect x="40" y="95" width="150" height="44" rx="10"/><text x="115" y="117">WIFI_INIT</text></g>
+              <g class="fsm-node" data-state="LINK_IDLE" tabindex="0" role="button" aria-label="LINK_IDLE state"><rect x="40" y="200" width="150" height="44" rx="10"/><text x="115" y="222">LINK_IDLE</text></g>
+              <g class="fsm-node" data-state="TX_FRAME" tabindex="0" role="button" aria-label="TX_FRAME state"><rect x="296" y="55" width="154" height="44" rx="10"/><text x="373" y="77">TX_FRAME</text></g>
+              <g class="fsm-node" data-state="WAIT_RESPONSE" tabindex="0" role="button" aria-label="WAIT_RESPONSE state"><rect x="506" y="55" width="154" height="44" rx="10"/><text x="583" y="77">WAIT_RESPONSE</text></g>
+              <g class="fsm-node" data-state="LINK_ERROR" tabindex="0" role="button" aria-label="LINK_ERROR state"><rect x="714" y="55" width="150" height="44" rx="10"/><text x="789" y="77">LINK_ERROR</text></g>
+              <g class="fsm-node" data-state="RX_FRAME" tabindex="0" role="button" aria-label="RX_FRAME state"><rect x="296" y="300" width="154" height="44" rx="10"/><text x="373" y="322">RX_FRAME</text></g>
+              <g class="fsm-node" data-state="VALIDATE_RX" tabindex="0" role="button" aria-label="VALIDATE_RX state"><rect x="506" y="300" width="154" height="44" rx="10"/><text x="583" y="322">VALIDATE_RX</text></g>
+              <g class="fsm-node" data-state="TX_RESPONSE" tabindex="0" role="button" aria-label="TX_RESPONSE state"><rect x="714" y="300" width="150" height="44" rx="10"/><text x="789" y="322">TX_RESPONSE</text></g>
+            </g>
+          </svg>
+          <div class="field-detail inset fsm-detail" id="fsm-detail">
+            <h4>LINK_IDLE</h4>
+            <p>Waiting with no transaction in flight. The board may originate a new request if it owns the link, or accept an inbound clock burst from the peer.</p>
+          </div>
+        </div>
+
+        <div class="stack">
+          <div class="card inset reveal">
+            <h3 style="font-size:15px">Event sources</h3>
+            <p class="micro" style="margin-top:8px">The clock ISR and the ESP-NOW receive callback copy a timestamp and bit into a queue, then return. No logging, allocation or state mutation happens there.</p>
+          </div>
+          <div class="card inset reveal">
+            <h3 style="font-size:15px">Boundaries</h3>
+            <p class="micro" style="margin-top:8px">A partial attempt that emitted fewer than 18 edges is cleared by the quiet-gap rule: wait at least <span style="font-family:var(--mono)">RX_FRAME_TIMEOUT + RESPONSE_START_GUARD</span> before reusing the sequence.</p>
+          </div>
+          <div class="card inset reveal">
+            <h3 style="font-size:15px">Role ownership</h3>
+            <p class="micro" style="margin-top:8px">A TURN frame is acknowledged like DATA. The receiver applies ownership before ACKing; the sender applies it only after validating that ACK.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================== lab -->
+  <section id="lab" class="section">
+    <div class="wrap">
+      <header class="section-head reveal">
+        <p class="eyebrow">08 · Bench notes</p>
+        <h2>Constants are a starting point, not a promise</h2>
+        <p class="lede">
+          The specification's timings are conservative lab defaults. Measure the optical front end,
+          ESP-NOW latency and clock edges on real hardware, then replace them with observed maxima plus
+          margin.
+        </p>
+      </header>
+
+      <div class="grid-2" style="margin-bottom:18px">
+        <div class="card reveal">
+          <h3>Signal budget</h3>
+          <div class="const-grid" style="margin-top:14px">
+            <div class="const-tile"><div class="name">CLK high</div><div class="val">2 000<small> µs</small></div><div class="note">starter value</div></div>
+            <div class="const-tile"><div class="name">CLK low min</div><div class="val">2 000<small> µs</small></div><div class="note">starter value</div></div>
+            <div class="const-tile"><div class="name">IR setup</div><div class="val">2 000<small> µs</small></div><div class="note">before the edge</div></div>
+            <div class="const-tile"><div class="name">Send timeout</div><div class="val">250<small> ms</small></div><div class="note">local callback</div></div>
+            <div class="const-tile"><div class="name">Frame timeout</div><div class="val">10<small> s</small></div><div class="note">hard receive bound</div></div>
+            <div class="const-tile"><div class="name">Retries</div><div class="val">3</div><div class="note">plus the initial try</div></div>
+          </div>
+        </div>
+        <div class="card reveal">
+          <h3>Bench checklist</h3>
+          <div class="check-progress" style="margin-top:14px">
+            <div class="bar"><i id="check-bar"></i></div>
+            <b id="check-count">0 / 12</b>
+          </div>
+          <div class="checklist" id="checklist">
+            <label class="check-item"><input type="checkbox" data-check="1"><span>Clock wires are crossed (A23→B22, B23→A22) and ground is common.</span></label>
+            <label class="check-item"><input type="checkbox" data-check="2"><span>CLK_TX stays LOW between frames; exactly 18 rising edges per direction.</span></label>
+            <label class="check-item"><input type="checkbox" data-check="3"><span>Infrared distinguishes 0 and 1 in both directions at the chosen timings.</span></label>
+            <label class="check-item"><input type="checkbox" data-check="4"><span>ESP-NOW shows 18 one-bit packets per frame — never a packed frame.</span></label>
+            <label class="check-item"><input type="checkbox" data-check="5"><span>A sends DATA; B returns a full ACK; A waits for it before the next byte.</span></label>
+            <label class="check-item"><input type="checkbox" data-check="6"><span>A corrupted frame bit produces a NACK or CRC rejection, then a retry.</span></label>
+            <label class="check-item"><input type="checkbox" data-check="7"><span>A dropped lane packet produces NACK 0x03; later bits do not shift.</span></label>
+            <label class="check-item"><input type="checkbox" data-check="8"><span>A lost ACK causes same-sequence retry with exactly-once delivery.</span></label>
+            <label class="check-item"><input type="checkbox" data-check="9"><span>TURN handoff lets B originate; A answers with its own clock.</span></label>
+            <label class="check-item"><input type="checkbox" data-check="10"><span>END completes the message and both boards return to idle.</span></label>
+            <label class="check-item"><input type="checkbox" data-check="11"><span>Actual latency and maximum jitter have been measured and constants updated.</span></label>
+            <label class="check-item"><input type="checkbox" data-check="12"><span>IR emissions do not crosstalk; shielding added if needed.</span></label>
+          </div>
+        </div>
+      </div>
+
+      <div class="lab-grid">
+        <div class="card reveal">
+          <h3>Hardware-dependent questions</h3>
+          <ul class="limits" style="margin-top:12px">
+            <li>Exact emitter/detector circuit, idle polarity and whether a 38 kHz demodulator needs bursts.</li>
+            <li>Whether the chosen timings tolerate real ESP-NOW jitter and packet loss.</li>
+            <li>The actual Wi-Fi channel, peer MAC addresses and node provisioning.</li>
+            <li>Whether reverse-direction IR emissions interfere with the local receiver.</li>
+            <li>How to reset both boards' session state when only one reboots.</li>
+          </ul>
+        </div>
+        <div class="card reveal">
+          <h3>Project files</h3>
+          <div class="link-list">
+            <a href="../README.md"><span>Project README</span><code>README.md</code></a>
+            <a href="../main/serial_cli.h"><span>Firmware console contract</span><code>main/serial_cli.h</code></a>
+            <a href="../tools/board-cli/README.md"><span>Host CLI and @PHY protocol</span><code>tools/board-cli/README.md</code></a>
+            <a href="../main/frame.c"><span>Frame serialization</span><code>main/frame.c</code></a>
+          </div>
+          <p class="micro" style="margin-top:12px">Open this page directly in a browser; it has no build step and no external dependencies.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap footer-inner">
+    <span>Interactive field guide to the dual-medium ESP32 PHY protocol · v1.0</span>
+    <span>Frame, CRC and timings follow the implementation spec and <a href="../main/protocol_config.h">firmware constants</a>.</span>
+  </div>
+</footer>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(() => {
+  'use strict';
+
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+  const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const hex = (n) => '0x' + (n & 0xff).toString(16).toUpperCase().padStart(2, '0');
+  const hexShort = (n) => '0x' + (n & 0xff).toString(16).toUpperCase();
+  const charFor = (n) => (n >= 0x20 && n <= 0x7e ? String.fromCharCode(n) : '·');
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  function store(key, value) {
+    try { localStorage.setItem(key, value); } catch (err) { /* file:// or private mode */ }
+  }
+  function load(key) {
+    try { return localStorage.getItem(key); } catch (err) { return null; }
+  }
+
+  /* ------------------------------------------------------------ theme */
+  const themeToggle = $('#theme-toggle');
+  const savedTheme = load('phy-theme');
+  if (savedTheme === 'light' || savedTheme === 'dark') {
+    document.documentElement.dataset.theme = savedTheme;
+  }
+  function syncThemeButton() {
+    const dark = document.documentElement.dataset.theme !== 'light';
+    themeToggle.setAttribute('aria-pressed', String(!dark));
+    themeToggle.setAttribute('aria-label', dark ? 'Switch to light theme' : 'Switch to dark theme');
+  }
+  syncThemeButton();
+  themeToggle.addEventListener('click', () => {
+    const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+    document.documentElement.dataset.theme = next;
+    store('phy-theme', next);
+    syncThemeButton();
+  });
+
+  /* ------------------------------------------------------------ CRC-8 */
+  const CRC_PROFILES = {
+    smbus: { name: 'CRC-8/SMBUS', poly: 0x07, init: 0x00, refin: false, refout: false, xorout: 0x00, check: 0xf4 },
+    autosar: { name: 'CRC-8/AUTOSAR', poly: 0x2f, init: 0xff, refin: false, refout: false, xorout: 0xff, check: 0xdf },
+    'sae-j1850': { name: 'CRC-8/SAE-J1850', poly: 0x1d, init: 0xff, refin: false, refout: false, xorout: 0xff, check: 0x4b },
+    'maxim-dow': { name: 'CRC-8/MAXIM-DOW', poly: 0x31, init: 0x00, refin: true, refout: true, xorout: 0x00, check: 0xa1 }
+  };
+
+  function reflect8(value) {
+    let v = value & 0xff;
+    v = ((v & 0xf0) >> 4) | ((v & 0x0f) << 4);
+    v = ((v & 0xcc) >> 2) | ((v & 0x33) << 2);
+    v = ((v & 0xaa) >> 1) | ((v & 0x55) << 1);
+    return v & 0xff;
+  }
+
+  function crc8(bytes, key) {
+    const p = CRC_PROFILES[key] || CRC_PROFILES.smbus;
+    let crc = p.init;
+    for (const raw of bytes) {
+      let byte = raw & 0xff;
+      if (p.refin) byte = reflect8(byte);
+      crc ^= byte;
+      for (let bit = 0; bit < 8; bit++) {
+        crc = crc & 0x80 ? ((crc << 1) ^ p.poly) & 0xff : (crc << 1) & 0xff;
+      }
+    }
+    if (p.refout) crc = reflect8(crc);
+    return (crc ^ p.xorout) & 0xff;
+  }
+
+  const frameCrc = (control, data, key) => crc8([control & 0x0f, data & 0xff], key);
+
+  /* ------------------------------------------------------------ frame codec */
+  const TYPES = {
+    DATA: { control: 0x1, label: 'DATA' },
+    ACK: { control: 0x2, label: 'ACK' },
+    NACK: { control: 0x3, label: 'NACK' },
+    TURN: { control: 0x4, label: 'TURN' },
+    END: { control: 0x5, label: 'END' }
+  };
+  const REASONS = {
+    1: 'CRC',
+    2: 'framing',
+    3: 'missing lane bit',
+    4: 'timeout',
+    5: 'unexpected state',
+    6: 'unsupported type'
+  };
+  const FIELD_ORDER = [
+    { key: 'SYN', start: 0, len: 8 },
+    { key: 'SFD', start: 8, len: 8 },
+    { key: 'CONTROL', start: 16, len: 4 },
+    { key: 'DATA', start: 20, len: 8 },
+    { key: 'CRC', start: 28, len: 8 }
+  ];
+
+  const byteBits = (value) => Array.from({ length: 8 }, (_, i) => (value >> (7 - i)) & 1);
+  const nibbleBits = (value) => Array.from({ length: 4 }, (_, i) => (value >> (3 - i)) & 1);
+  const bitsToByte = (bits) => bits.reduce((acc, bit) => (acc << 1) | (bit ? 1 : 0), 0);
+
+  function parseBits(bits, profile) {
+    const syn = bitsToByte(bits.slice(0, 8));
+    const sfd = bitsToByte(bits.slice(8, 16));
+    const control = bitsToByte(bits.slice(16, 20));
+    const data = bitsToByte(bits.slice(20, 28));
+    const crc = bitsToByte(bits.slice(28, 36));
+    const expected = frameCrc(control, data, profile);
+    let status = 'OK';
+    if (syn !== 0x66 || sfd !== 0xd5) status = 'BAD_FRAMING';
+    else if (![1, 2, 3, 4, 5].includes(control)) status = 'UNSUPPORTED';
+    else if (crc !== expected) status = 'BAD_CRC';
+    return { status, syn, sfd, control, data, crc, expected };
+  }
+
+  /* ------------------------------------------------------------ frame builder */
+  const frameState = { type: 'DATA', data: 0x41, reason: 3, crc: 'smbus', frame: null };
+  let selection = { type: 'field', value: 'SYN' };
+
+  const frameBitsEl = $('#frame-bits');
+  const frameBitsScroll = $('.bits-scroll');
+  const typeSeg = $('#type-seg');
+  const dataInput = $('#data-input');
+  const charReadout = $('#char-readout');
+  const reasonWrap = $('#reason-wrap');
+  const reasonSelect = $('#reason-select');
+  const crcProfile = $('#crc-profile');
+  const fieldDetail = $('#field-detail');
+  const detailTitle = $('#detail-title');
+  const detailBadge = $('#detail-badge');
+  const detailText = $('#detail-text');
+  const cycleSelect = $('#cycle-select');
+
+  function buildFrame() {
+    const type = frameState.type;
+    const control = TYPES[type].control;
+    const data = type === 'NACK' ? frameState.reason : type === 'DATA' ? frameState.data : 0;
+    const crc = frameCrc(control, data, frameState.crc);
+    const bits = [
+      ...byteBits(0x66), ...byteBits(0xd5),
+      ...nibbleBits(control), ...byteBits(data), ...byteBits(crc)
+    ];
+    return { type, control, data, crc, bits };
+  }
+
+  function dataValue(frame) {
+    if (frame.type === 'DATA') return `${hex(frame.data)} '${charFor(frame.data)}'`;
+    if (frame.type === 'NACK') return `${hex(frame.data)} · ${REASONS[frame.data] || 'reserved'}`;
+    return '0x00 · reserved';
+  }
+
+  function renderFrame() {
+    const frame = buildFrame();
+    frameState.frame = frame;
+
+    $('#frame-summary').innerHTML =
+      `<span class="summary-title">${frame.type} frame</span>` +
+      `<span class="badge">CONTROL ${hexShort(frame.control)}</span>` +
+      `<span class="badge">DATA ${hexShort(frame.data)}</span>` +
+      `<span class="badge">CRC ${hexShort(frame.crc)}</span>` +
+      `<span class="badge ok">36 bits · 18 cycles</span>`;
+
+    const values = {
+      SYN: '0x66', SFD: '0xD5',
+      CONTROL: `${hexShort(frame.control)} · ${frame.type}`,
+      DATA: dataValue(frame),
+      CRC: hexShort(frame.crc)
+    };
+
+    frameBitsEl.innerHTML = FIELD_ORDER.map((field) => {
+      const fieldBits = frame.bits.slice(field.start, field.start + field.len);
+      const cells = fieldBits.map((bit, i) => {
+        const index = field.start + i;
+        const lane = index % 2 === 0 ? 'IR' : 'ESP-NOW';
+        return `<span class="bit ${bit ? 'one' : ''}" data-index="${index}" title="bit ${index} · cycle ${Math.floor(index / 2)} · ${lane} lane">${bit}<small>${index}</small></span>`;
+      }).join('');
+      return `<div class="field" data-field="${field.key}" role="button" tabindex="0" aria-label="${field.key} field, bits ${field.start} to ${field.start + field.len - 1}">
+        <div class="field-head"><span class="field-name">${field.key}</span><span class="field-value">${esc(values[field.key])}</span></div>
+        <div class="bits">${cells}</div>
+      </div>`;
+    }).join('');
+
+    const p = CRC_PROFILES[frameState.crc];
+    $('#crc-line').innerHTML =
+      `<span>CRC-8/SMBUS( ${hexShort(frame.control)} , ${hexShort(frame.data)} ) = <b>${hex(frame.crc)}</b></span>` +
+      `<span class="ok-mark">✓ ${p.name} check ${hex(p.check)}</span>` +
+      `<span class="micro">input = CONTROL (low nibble) + DATA</span>`;
+
+    updateCharReadout();
+    renderLanes();
+    updateCycleEcho();
+    updateWrongOrder();
+    showSelection();
+  }
+
+  function updateCharReadout() {
+    if (frameState.type === 'DATA') {
+      charReadout.textContent = `'${charFor(frameState.data)}'`;
+    } else if (frameState.type === 'NACK') {
+      charReadout.textContent = REASONS[frameState.reason] || 'reason';
+      charReadout.style.fontSize = '11px';
+    } else {
+      charReadout.textContent = '—';
+      charReadout.style.fontSize = '';
+    }
+    if (frameState.type !== 'NACK') charReadout.style.fontSize = '';
+  }
+
+  function parseInputByte(text) {
+    const match = String(text).trim().match(/^(?:0x)?([0-9a-f]{1,2})$/i);
+    return match ? parseInt(match[1], 16) : null;
+  }
+
+  function applyDataInput() {
+    if (frameState.type !== 'DATA') return;
+    const value = parseInputByte(dataInput.value);
+    if (value === null) {
+      dataInput.classList.add('invalid');
+      return;
+    }
+    dataInput.classList.remove('invalid');
+    frameState.data = value;
+    renderFrame();
+  }
+
+  function setType(type) {
+    frameState.type = type;
+    $$('#type-seg button').forEach((button) => {
+      button.setAttribute('aria-pressed', String(button.dataset.type === type));
+    });
+    const isData = type === 'DATA';
+    dataInput.disabled = !isData;
+    $$('#data-presets button').forEach((button) => { button.disabled = !isData; });
+    $('#data-field-wrap').hidden = !isData;
+    reasonWrap.hidden = type !== 'NACK';
+    $('#reserved-note').hidden = isData || type === 'NACK';
+    if (isData) {
+      dataInput.value = hex(frameState.data);
+      $('#data-help').textContent = 'Hex 0x00–0xFF. A text byte becomes one DATA frame.';
+    } else if (type === 'NACK') {
+      dataInput.value = hex(frameState.reason);
+      $('#data-help').textContent = 'For NACK, DATA carries the reason code chosen below.';
+    } else {
+      dataInput.value = '0x00';
+      $('#data-help').textContent = 'ACK, TURN and END reserve DATA = 0x00.';
+    }
+    renderFrame();
+  }
+
+  typeSeg.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-type]');
+    if (button) setType(button.dataset.type);
+  });
+
+  dataInput.addEventListener('input', applyDataInput);
+  dataInput.addEventListener('blur', () => {
+    if (frameState.type !== 'DATA') return;
+    const value = parseInputByte(dataInput.value);
+    if (value === null) {
+      dataInput.value = hex(frameState.data);
+      dataInput.classList.remove('invalid');
+    } else {
+      dataInput.value = hex(value);
+    }
+  });
+  dataInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') dataInput.blur();
+  });
+
+  $('#data-presets').addEventListener('click', (event) => {
+    const chip = event.target.closest('[data-data]');
+    if (!chip || frameState.type !== 'DATA') return;
+    const value = parseInputByte(chip.dataset.data);
+    if (value === null) return;
+    dataInput.value = hex(value);
+    frameState.data = value;
+    renderFrame();
+  });
+
+  reasonSelect.addEventListener('change', () => {
+    frameState.reason = Number(reasonSelect.value) || 1;
+    dataInput.value = hex(frameState.reason);
+    renderFrame();
+  });
+  crcProfile.addEventListener('change', () => {
+    frameState.crc = crcProfile.value;
+    renderFrame();
+  });
+
+  frameBitsEl.addEventListener('click', (event) => {
+    const bit = event.target.closest('.bit');
+    if (bit) {
+      selection = { type: 'bit', value: Number(bit.dataset.index) };
+      showSelection();
+      const cycle = Math.floor(Number(bit.dataset.index) / 2);
+      highlightCycle(cycle);
+      setTimingCycle(cycle);
+      return;
+    }
+    const field = event.target.closest('.field');
+    if (field) {
+      selection = { type: 'field', value: field.dataset.field };
+      showSelection();
+    }
+  });
+  frameBitsEl.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const field = event.target.closest('.field');
+    if (!field) return;
+    event.preventDefault();
+    selection = { type: 'field', value: field.dataset.field };
+    showSelection();
+  });
+
+  const FIELD_INFO = {
+    SYN: {
+      badge: 'training · 8 bits',
+      text: () => `The fixed byte <code>0x66</code> (<code>01100110</code>). It verifies that the two lanes are paired correctly and that the receiver is decoding the right bit order. It is <em>not</em> used to recover a free-running clock — the wired clock already gives the bit cells.`
+    },
+    SFD: {
+      badge: 'start delimiter · 8 bits',
+      text: () => `The fixed byte <code>0xD5</code> (<code>11010101</code>). After SYN, it confirms where CONTROL begins. A mismatch means the transaction is not a valid frame start.`
+    },
+    CONTROL: {
+      badge: '4 bits · frame type',
+      text: (frame) => `Value <code>${hexShort(frame.control)}</code>, type <b>${frame.type}</b>. Only 1–5 are valid: DATA, ACK, NACK, TURN, END. Any other value is a well-framed but unsupported type.`
+    },
+    DATA: {
+      badge: '8 bits · payload',
+      text: (frame) => {
+        if (frame.type === 'DATA') return `Value <code>${hex(frame.data)}</code>, character <code>'${charFor(frame.data)}'</code>. Each text byte becomes its own DATA frame; END closes the logical message.`;
+        if (frame.type === 'NACK') return `Value <code>${hex(frame.data)}</code> — NACK reason <b>${REASONS[frame.data] || 'reserved'}</b>.`;
+        return `Reserved <code>0x00</code> for ${frame.type}. The acknowledgment is correlated by <code>frame_seq</code>, not by a payload value.`;
+      }
+    },
+    CRC: {
+      badge: '8 bits · integrity',
+      text: (frame) => `CRC-8 over <code>[CONTROL &amp; 0x0F, DATA]</code> = <code>${hex(frame.crc)}</code>. SYN, SFD and the CRC byte itself are excluded. If this check fails, the receiver answers NACK 0x01 (or times out if it lacks context).`
+    }
+  };
+
+  function renderFieldDetail(key) {
+    const info = FIELD_INFO[key] || FIELD_INFO.SYN;
+    const frame = frameState.frame;
+    detailTitle.textContent = key;
+    detailBadge.textContent = info.badge;
+    detailText.innerHTML = info.text(frame);
+  }
+
+  function renderBitDetail(index) {
+    const frame = frameState.frame;
+    const field = FIELD_ORDER.find((item) => index >= item.start && index < item.start + item.len) || FIELD_ORDER[0];
+    const local = index - field.start;
+    const lane = index % 2 === 0 ? 'infrared' : 'ESP-NOW';
+    const cycle = Math.floor(index / 2);
+    detailTitle.textContent = `bit ${index}`;
+    detailBadge.textContent = `${field.key} · ${local + 1}/${field.len}`;
+    detailText.innerHTML =
+      `Value <code>${frame.bits[index]}</code>. Logical position ${index} sits in the <b>${field.key}</b> field, ` +
+      `travels on the <b>${lane}</b> lane in cycle <b>${cycle}</b> as the ${index % 2 === 0 ? 'first' : 'second'} bit of that pair.`;
+  }
+
+  function showSelection() {
+    if (selection.type === 'bit') renderBitDetail(selection.value);
+    else renderFieldDetail(selection.value);
+  }
+
+  $('#show-indices').addEventListener('change', (event) => {
+    frameBitsEl.classList.toggle('show-idx', event.target.checked);
+  });
+
+  $('#copy-bits').addEventListener('click', () => {
+    copyText(frameState.frame.bits.join(''), 'Copied the 36-bit stream');
+  });
+
+  /* ------------------------------------------------------------ clipboard + toast */
+  let toastTimer = null;
+  function showToast(message) {
+    const toast = $('#toast');
+    toast.textContent = message;
+    toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove('show'), 2200);
+  }
+
+  function copyText(text, message) {
+    const fallback = () => {
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      try {
+        document.execCommand('copy');
+        showToast(message);
+      } catch (err) {
+        showToast('Copy failed — select the bits manually');
+      }
+      area.remove();
+    };
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(() => showToast(message)).catch(fallback);
+    } else {
+      fallback();
+    }
+  }
+
+  /* ------------------------------------------------------------ wiring filter */
+  function initWiring() {
+    const svg = $('#wiring');
+    const chips = $$('.diagram-card [data-channel]');
+    chips.forEach((chip) => {
+      chip.addEventListener('click', () => {
+        chips.forEach((other) => {
+          const on = other === chip;
+          other.classList.toggle('is-on', on);
+          other.setAttribute('aria-pressed', String(on));
+        });
+        svg.dataset.focus = chip.dataset.channel;
+      });
+    });
+  }
+
+  /* ------------------------------------------------------------ lanes */
+  const laneGrid = $('#lane-grid');
+  const laneDecode = $('#lane-decode');
+  const wrongBox = $('#wrong-box');
+  const wrongToggle = $('#lane-wrong-toggle');
+  const lanePlay = $('#lane-play');
+  let laneTimer = null;
+
+  function renderLanes() {
+    const bits = frameState.frame.bits;
+    laneGrid.innerHTML = Array.from({ length: 18 }, (_, k) => {
+      const ir = bits[2 * k];
+      const wifi = bits[2 * k + 1];
+      return `<div class="lane-col" data-cycle="${k}" role="group" aria-label="Cycle ${k}: IR ${ir}, ESP-NOW ${wifi}">
+        <span class="lane-head">${String(k).padStart(2, '0')}</span>
+        <span class="lane-cell ir ${ir ? 'one' : ''}" title="IR bit">${ir}</span>
+        <span class="lane-cell wifi ${wifi ? 'one' : ''}" title="ESP-NOW bit">${wifi}</span>
+        <span class="lane-pair">${ir}${wifi}</span>
+      </div>`;
+    }).join('');
+    renderLaneDecode(18);
+  }
+
+  function renderLaneDecode(pairs) {
+    const bits = frameState.frame.bits;
+    const partial = bits.slice(0, pairs * 2);
+    const parsed = pairs >= 18 ? parseBits(bits, frameState.crc) : null;
+    let html =
+      `<div class="decode-row"><span class="k">pairs</span><span class="v">${pairs} / 18</span></div>` +
+      `<div class="decode-row"><span class="k">bits</span><span class="v" style="word-break:break-all">${partial.join('') || '—'}</span></div>`;
+    if (parsed) {
+      const ok = parsed.status === 'OK';
+      html +=
+        `<div class="decode-row"><span class="k">result</span><span class="v"><span class="status-pill ${ok ? 'ok' : 'bad'}">${parsed.status}</span></span></div>` +
+        `<div class="decode-row"><span class="k">SYN</span><span class="v">${hex(parsed.syn)} ${parsed.syn === 0x66 ? '✓' : '✗'}</span></div>` +
+        `<div class="decode-row"><span class="k">SFD</span><span class="v">${hex(parsed.sfd)} ${parsed.sfd === 0xd5 ? '✓' : '✗'}</span></div>` +
+        `<div class="decode-row"><span class="k">CONTROL</span><span class="v">${hexShort(parsed.control)} · ${TYPES[frameState.type].label}</span></div>` +
+        `<div class="decode-row"><span class="k">DATA</span><span class="v">${hex(parsed.data)} '${charFor(parsed.data)}'</span></div>` +
+        `<div class="decode-row"><span class="k">CRC</span><span class="v">${hex(parsed.crc)} ${parsed.crc === parsed.expected ? '✓' : '✗ expected ' + hex(parsed.expected)}</span></div>`;
+    } else {
+      html += `<p class="micro">Pair both lanes at every cycle to reveal the 36-bit frame.</p>`;
+    }
+    laneDecode.innerHTML = html;
+  }
+
+  function highlightCycle(cycle) {
+    $$('.lane-col', laneGrid).forEach((col) => {
+      col.classList.toggle('is-active', Number(col.dataset.cycle) === cycle);
+    });
+  }
+
+  function stopLaneAnimation() {
+    if (laneTimer !== null) {
+      clearInterval(laneTimer);
+      laneTimer = null;
+    }
+    lanePlay.disabled = false;
+    lanePlay.textContent = 'Animate pairing';
+  }
+
+  lanePlay.addEventListener('click', () => {
+    stopLaneAnimation();
+    let k = 0;
+    lanePlay.disabled = true;
+    lanePlay.textContent = 'Pairing…';
+    const tick = () => {
+      highlightCycle(k);
+      renderLaneDecode(k + 1);
+      k += 1;
+      if (k >= 18) {
+        stopLaneAnimation();
+        highlightCycle(-1);
+      }
+    };
+    tick();
+    laneTimer = setInterval(tick, 220);
+  });
+
+  $('#lane-reset').addEventListener('click', () => {
+    stopLaneAnimation();
+    highlightCycle(-1);
+    renderLaneDecode(18);
+  });
+
+  wrongToggle.addEventListener('change', updateWrongOrder);
+
+  function updateWrongOrder() {
+    if (!wrongToggle.checked) {
+      wrongBox.hidden = true;
+      return;
+    }
+    const bits = frameState.frame.bits;
+    const ir = bits.filter((_, index) => index % 2 === 0);
+    const wifi = bits.filter((_, index) => index % 2 === 1);
+    const wrong = [...ir, ...wifi];
+    const parsed = parseBits(wrong, frameState.crc);
+    wrongBox.hidden = false;
+    $('#wrong-bits').textContent = wrong.join(' ');
+    const status = $('#wrong-status');
+    status.textContent = parsed.status;
+    status.className = 'status-pill ' + (parsed.status === 'OK' ? 'ok' : 'bad');
+    $('#wrong-explain').textContent =
+      `Expected SYN 0x66, read ${hex(parsed.syn)}. Expected SFD 0xD5, read ${hex(parsed.sfd)}. ` +
+      `The pairing order is not optional.`;
+  }
+
+  // Clicking a lane column jumps the timing example to that cycle.
+  laneGrid.addEventListener('click', (event) => {
+    const col = event.target.closest('.lane-col');
+    if (!col) return;
+    highlightCycle(Number(col.dataset.cycle));
+    setTimingCycle(Number(col.dataset.cycle));
+  });
+
+  /* ------------------------------------------------------------ timing */
+  const PHASE_WEIGHTS = [0.26, 0.28, 0.14, 0.16, 0.16];
+  const PHASE_CLASSES = ['setup', 'send', 'guard', 'high', 'low'];
+  const timingPlay = $('#timing-play');
+  const playhead = $('#playhead');
+  let timingPlaying = false;
+  let timingRaf = 0;
+  let timingElapsed = 0;
+  let timingLast = 0;
+  let timingSpeed = 1;
+  let timingCycle = 10;
+
+  function phaseCumulative(index) {
+    return PHASE_WEIGHTS.slice(0, index).reduce((sum, weight) => sum + weight, 0);
+  }
+
+  function setPhaseDom(index) {
+    $$('.trace-row').forEach((row) => {
+      $$('.trace-cell', row).forEach((cell, i) => cell.classList.toggle('is-active', i === index));
+    });
+    $$('.phase-card').forEach((card) => card.classList.toggle('is-active', Number(card.dataset.phase) === index));
+  }
+
+  function updateCycleEcho() {
+    const frame = frameState.frame;
+    if (!frame) return;
+    const k = clamp(timingCycle, 0, 17);
+    const ir = frame.bits[2 * k];
+    const wifi = frame.bits[2 * k + 1];
+    cycleSelect.value = String(k);
+    $('#cycle-num').textContent = String(k);
+    $('#cycle-label').textContent = 'cycle ' + k;
+    $('#cycle-ir').textContent = String(ir);
+    $('#cycle-wifi').textContent = String(wifi);
+    $('#cycle-pair').textContent = `${ir}${wifi}`;
+  }
+
+  function setTimingCycle(k) {
+    timingCycle = clamp(Number(k) || 0, 0, 17);
+    updateCycleEcho();
+  }
+
+  function stopTiming() {
+    timingPlaying = false;
+    cancelAnimationFrame(timingRaf);
+    timingPlay.textContent = 'Play';
+  }
+
+  function timingTick(now) {
+    if (!timingPlaying) return;
+    const dt = Math.max(0, now - timingLast);
+    timingLast = now;
+    timingElapsed += dt * timingSpeed;
+    const total = 1800;
+    if (timingElapsed >= total) {
+      timingElapsed -= total;
+      timingCycle = (timingCycle + 1) % 18;
+      updateCycleEcho();
+    }
+    const t = timingElapsed / total;
+    let acc = 0;
+    let phase = 0;
+    for (let i = 0; i < PHASE_WEIGHTS.length; i++) {
+      if (t < acc + PHASE_WEIGHTS[i]) { phase = i; break; }
+      acc += PHASE_WEIGHTS[i];
+    }
+    setPhaseDom(phase);
+    playhead.classList.add('on');
+    playhead.style.left = (t * 100).toFixed(2) + '%';
+    timingRaf = requestAnimationFrame(timingTick);
+  }
+
+  function startTiming() {
+    if (timingPlaying) return;
+    timingPlaying = true;
+    timingPlay.textContent = 'Pause';
+    timingLast = performance.now();
+    timingRaf = requestAnimationFrame(timingTick);
+  }
+
+  timingPlay.addEventListener('click', () => {
+    if (timingPlaying) stopTiming();
+    else startTiming();
+  });
+
+  $('#timing-step').addEventListener('click', () => {
+    stopTiming();
+    const total = 1800;
+    const t = timingElapsed / total;
+    let phase = 0;
+    let acc = 0;
+    for (let i = 0; i < PHASE_WEIGHTS.length; i++) {
+      if (t < acc + PHASE_WEIGHTS[i]) { phase = i; break; }
+      acc += PHASE_WEIGHTS[i];
+    }
+    phase = (phase + 1) % 5;
+    if (phase === 0) {
+      timingCycle = (timingCycle + 1) % 18;
+      updateCycleEcho();
+    }
+    timingElapsed = phaseCumulative(phase) * total + 2;
+    setPhaseDom(phase);
+    playhead.classList.add('on');
+    playhead.style.left = (phaseCumulative(phase) * 100).toFixed(2) + '%';
+  });
+
+  $('#timing-reset').addEventListener('click', () => {
+    stopTiming();
+    timingElapsed = 0;
+    setPhaseDom(0);
+    playhead.classList.remove('on');
+    playhead.style.left = '0%';
+  });
+
+  $('#timing-speed').addEventListener('change', (event) => {
+    timingSpeed = Number(event.target.value) || 1;
+  });
+
+  cycleSelect.addEventListener('input', () => {
+    timingCycle = Number(cycleSelect.value) || 0;
+    updateCycleEcho();
+  });
+
+  $$('.phase-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      stopTiming();
+      const phase = Number(card.dataset.phase);
+      timingElapsed = phaseCumulative(phase) * 1800 + 2;
+      setPhaseDom(phase);
+      playhead.classList.add('on');
+      playhead.style.left = (phaseCumulative(phase) * 100).toFixed(2) + '%';
+    });
+  });
+
+  /* ------------------------------------------------------------ budget */
+  function fmtUs(us) {
+    if (us >= 1000) {
+      const ms = us / 1000;
+      return (Number.isInteger(ms) ? ms : ms.toFixed(1)) + ' ms';
+    }
+    return Math.round(us) + ' µs';
+  }
+
+  function updateBudget() {
+    const ir = Math.max(0, Number($('#b-ir').value) || 0);
+    const send = Math.max(0, Number($('#b-send').value) || 0) * 1000;
+    const guard = Math.max(0, Number($('#b-guard').value) || 0) * 1000;
+    const high = Math.max(0, Number($('#b-high').value) || 0);
+    const low = Math.max(0, Number($('#b-low').value) || 0);
+    const cycle = Math.max(ir, send) + guard + high + low;
+    const frame = cycle * 18;
+    $('#budget-cycle').textContent = (cycle / 1000).toFixed(1) + ' ms';
+    $('#budget-frame').textContent = frame >= 1000000
+      ? (frame / 1000000).toFixed(2) + ' s'
+      : frame >= 1000
+        ? (frame / 1000).toFixed(1) + ' ms'
+        : Math.round(frame) + ' µs';
+    const phaseTimes = [fmtUs(ir), null, fmtUs(guard), fmtUs(high), fmtUs(low)];
+    phaseTimes.forEach((time, index) => {
+      if (time === null) return;
+      const el = $(`.phase-card[data-phase="${index}"] .p-time`);
+      if (el) el.textContent = time;
+    });
+  }
+
+  $$('#b-ir, #b-send, #b-guard, #b-high, #b-low').forEach((input) => {
+    input.addEventListener('input', updateBudget);
+  });
+
+  /* ------------------------------------------------------------ simulator */
+  const simPlay = $('#sim-play');
+  const simStep = $('#sim-step');
+  const simReset = $('#sim-reset');
+  const simMessage = $('#sim-message');
+  const simScenario = $('#sim-scenario');
+  const simSpeed = $('#sim-speed');
+  const simLog = $('#sim-log');
+  const simReceivedEl = $('#sim-received');
+  const simVerdict = $('#sim-verdict');
+  const wireScene = $('#wire-scene');
+
+  const SCENARIO_NOTES = {
+    clean: 'Every byte is acknowledged before the next one starts, then END closes the logical message. Sequence numbers increase once per request.',
+    nack: 'One DATA bit is corrupted in flight. B rejects the frame with NACK 0x01; A retransmits the identical frame and sequence, so the payload is still delivered once.',
+    dropack: 'B accepts the byte and sends the ACK, but the ACK disappears. A times out and retries the same sequence; B recognises the duplicate and re-ACKs without delivering twice.',
+    missing: 'Cycle 7 loses its ESP-NOW packet. The slot stays empty — later bits do not shift. B answers NACK 0x03 and A retries the frame.',
+    exhaust: 'The first byte never passes CRC. After the initial frame plus three retransmissions, A stops originating and enters LINK_ERROR.',
+    turn: 'After a normal message, A hands ownership to B with TURN. B then originates a reply using its own clock; A acknowledges as responder.'
+  };
+
+  const SCENARIO_VERDICTS = {
+    clean: 'Complete — every byte passed CRC and was acknowledged, then END closed the message.',
+    nack: 'Recovered from one corrupted frame; the byte was delivered exactly once.',
+    dropack: 'Recovered from a lost ACK; duplicate suppression kept delivery at exactly once.',
+    missing: 'Recovered from a missing lane bit with NACK 0x03 and a same-sequence retry.',
+    exhaust: 'Transfer failed. No byte was delivered; the link is in LINK_ERROR until reset.',
+    turn: 'TURN complete — B originated a reply and A acknowledged it.'
+  };
+
+  const sim = {
+    events: [],
+    index: 0,
+    playing: false,
+    timer: null,
+    speed: 2,
+    scenario: 'clean',
+    message: 'hello',
+    owner: 'A',
+    seq: null,
+    attempt: null,
+    states: { A: 'LINK_IDLE', B: 'LINK_IDLE' },
+    received: { A: [], B: [] },
+    cycleFrame: 0,
+    pulseTimer: null
+  };
+
+  function simBytes() {
+    const text = (sim.message || '').trim() || 'hi';
+    return Array.from(new TextEncoder().encode(text)).slice(0, 12);
+  }
+
+  function frameLabel(type, data) {
+    if (type === 'DATA') return `DATA ${hex(data)} '${charFor(data)}'`;
+    if (type === 'NACK') return `NACK ${hex(data)} (${REASONS[data] || 'reason'})`;
+    return type;
+  }
+
+  function direction(from, to) {
+    return from === 'A' ? 'a2b' : 'b2a';
+  }
+
+  function txEvent(from, to, type, data, seq, attempt) {
+    return {
+      actor: from,
+      state: 'TX_FRAME',
+      kind: 'tx',
+      wire: direction(from, to),
+      seq,
+      attempt,
+      text: `${from} → ${to} · ${frameLabel(type, data)} · seq ${seq} · 18 cycles (one IR bit + one ESP-NOW bit each)`
+    };
+  }
+
+  function deliveryEvent(to, byte, seq) {
+    return {
+      actor: to,
+      state: 'VALIDATE_RX',
+      kind: 'deliver',
+      seq,
+      deliver: { to, byte },
+      text: `${to} validates SYN 0x66, SFD 0xD5 and CRC ✓ — delivers ${hex(byte)} '${charFor(byte)}' once`
+    };
+  }
+
+  function ackEvent(from, to, seq, type = 'ACK') {
+    return {
+      actor: from,
+      state: 'TX_RESPONSE',
+      kind: type === 'ACK' ? 'ack' : 'nack',
+      wire: direction(from, to),
+      seq,
+      text: `${from} → ${to} · complete ${type} frame over IR + ESP-NOW, clocked by ${from} · seq ${seq}`
+    };
+  }
+
+  function nackEvent(from, to, seq, reason) {
+    return {
+      actor: from,
+      state: 'TX_RESPONSE',
+      kind: 'nack',
+      wire: direction(from, to),
+      seq,
+      text: `${from} → ${to} · complete NACK frame · reason ${hex(reason)} (${REASONS[reason]}) · seq ${seq}`
+    };
+  }
+
+  function commitEvent(actor, seq, peer) {
+    return {
+      actor,
+      state: 'LINK_IDLE',
+      kind: 'ok',
+      seq,
+      idle: peer,
+      text: `${actor} validates the ACK — seq ${seq} committed`
+    };
+  }
+
+  function startEvent(seq = 41) {
+    return {
+      actor: 'A',
+      state: 'LINK_IDLE',
+      kind: 'info',
+      seq,
+      owner: 'A',
+      text: `Link idle — A is the originator; the first request uses seq ${seq}`
+    };
+  }
+
+  function cleanByteEvents(from, to, byte, seq) {
+    return [
+      txEvent(from, to, 'DATA', byte, seq, 1),
+      deliveryEvent(to, byte, seq),
+      ackEvent(to, from, seq),
+      commitEvent(from, seq, to)
+    ];
+  }
+
+  function endEvents(from, to, seq) {
+    return [
+      txEvent(from, to, 'END', 0, seq, 1),
+      {
+        actor: to,
+        state: 'VALIDATE_RX',
+        kind: 'ok',
+        seq,
+        text: `${to} validates the END frame ✓ — the logical message is complete`
+      },
+      ackEvent(to, from, seq),
+      commitEvent(from, seq, to)
+    ];
+  }
+
+  function buildClean() {
+    const bytes = simBytes();
+    const events = [startEvent()];
+    let seq = 41;
+    for (const byte of bytes) {
+      events.push(...cleanByteEvents('A', 'B', byte, seq));
+      seq += 1;
+    }
+    events.push(...endEvents('A', 'B', seq));
+    return events;
+  }
+
+  function buildNack() {
+    const bytes = simBytes();
+    const events = [startEvent()];
+    let seq = 41;
+    bytes.forEach((byte, index) => {
+      if (index === 0) {
+        events.push(txEvent('A', 'B', 'DATA', byte, seq, 1));
+        events.push({
+          actor: 'B', state: 'VALIDATE_RX', kind: 'bad', seq,
+          text: 'B reassembles 18 pairs, but the CRC check fails — one DATA bit was corrupted in flight'
+        });
+        events.push(nackEvent('B', 'A', seq, 1));
+        events.push({
+          actor: 'A', state: 'TX_FRAME', kind: 'retry', seq, attempt: 2,
+          text: 'A retransmits the identical 36-bit frame with the same seq (retry 1 of 3)'
+        });
+        events.push(txEvent('A', 'B', 'DATA', byte, seq, 2));
+        events.push(...cleanByteEvents('A', 'B', byte, seq).slice(1));
+      } else {
+        events.push(...cleanByteEvents('A', 'B', byte, seq));
+      }
+      seq += 1;
+    });
+    events.push(...endEvents('A', 'B', seq));
+    return events;
+  }
+
+  function buildMissing() {
+    const bytes = simBytes();
+    const events = [startEvent()];
+    let seq = 41;
+    bytes.forEach((byte, index) => {
+      if (index === 0) {
+        events.push(txEvent('A', 'B', 'DATA', byte, seq, 1));
+        events.push({
+          actor: 'B', state: 'VALIDATE_RX', kind: 'bad', seq,
+          text: 'Cycle 7 has no ESP-NOW packet. The slot stays empty; later bits do not shift left.'
+        });
+        events.push(nackEvent('B', 'A', seq, 3));
+        events.push({
+          actor: 'A', state: 'TX_FRAME', kind: 'retry', seq, attempt: 2,
+          text: 'A retries the whole frame with the same seq (retry 1 of 3)'
+        });
+        events.push(txEvent('A', 'B', 'DATA', byte, seq, 2));
+        events.push(...cleanByteEvents('A', 'B', byte, seq).slice(1));
+      } else {
+        events.push(...cleanByteEvents('A', 'B', byte, seq));
+      }
+      seq += 1;
+    });
+    events.push(...endEvents('A', 'B', seq));
+    return events;
+  }
+
+  function buildDropAck() {
+    const bytes = simBytes();
+    const events = [startEvent()];
+    let seq = 41;
+    bytes.forEach((byte, index) => {
+      if (index === 0) {
+        events.push(txEvent('A', 'B', 'DATA', byte, seq, 1));
+        events.push(deliveryEvent('B', byte, seq));
+        events.push(ackEvent('B', 'A', seq));
+        events.push({
+          actor: null, kind: 'lost',
+          text: 'The ACK frame is lost in the air — B accepted the byte, A sees nothing on CLK_RX'
+        });
+        events.push({
+          actor: 'A', state: 'WAIT_RESPONSE', kind: 'warn', seq,
+          text: 'A waits for a valid ACK until the response timeout expires'
+        });
+        events.push({
+          actor: 'A', state: 'TX_FRAME', kind: 'retry', seq, attempt: 2,
+          text: 'A retransmits the same frame with seq ' + seq
+        });
+        events.push(txEvent('A', 'B', 'DATA', byte, seq, 2));
+        events.push({
+          actor: 'B', state: 'VALIDATE_RX', kind: 'warn', seq,
+          text: `B finds seq ${seq} in its cache — duplicate; it does not deliver the byte again`
+        });
+        events.push(ackEvent('B', 'A', seq));
+        events.push(commitEvent('A', seq, 'B'));
+      } else {
+        events.push(...cleanByteEvents('A', 'B', byte, seq));
+      }
+      seq += 1;
+    });
+    events.push(...endEvents('A', 'B', seq));
+    return events;
+  }
+
+  function buildExhaust() {
+    const byte = simBytes()[0];
+    const events = [startEvent()];
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      events.push(txEvent('A', 'B', 'DATA', byte, 41, attempt));
+      events.push({
+        actor: 'B', state: 'VALIDATE_RX', kind: 'bad', seq: 41,
+        text: `Attempt ${attempt}: the CRC check fails at B`
+      });
+      events.push(nackEvent('B', 'A', 41, 1));
+      if (attempt < 4) {
+        events.push({
+          actor: 'A', state: 'TX_FRAME', kind: 'retry', seq: 41, attempt: attempt + 1,
+          text: `A retries the same frame with seq 41 (retry ${attempt} of 3)`
+        });
+      }
+    }
+    events.push({
+      actor: 'A', state: 'LINK_ERROR', kind: 'bad', seq: 41,
+      text: 'Initial attempt plus 3 retransmissions exhausted — A stops originating DATA and enters LINK_ERROR'
+    });
+    return events;
+  }
+
+  function buildTurn() {
+    const bytes = simBytes();
+    const events = [startEvent()];
+    let seq = 41;
+    for (const byte of bytes) {
+      events.push(...cleanByteEvents('A', 'B', byte, seq));
+      seq += 1;
+    }
+    events.push(...endEvents('A', 'B', seq));
+    seq += 1;
+
+    events.push(txEvent('A', 'B', 'TURN', 0, seq, 1));
+    events.push({
+      actor: 'B', state: 'VALIDATE_RX', kind: 'ok', seq, owner: 'B',
+      text: 'B validates TURN and applies ownership before sending the ACK'
+    });
+    events.push(ackEvent('B', 'A', seq));
+    events.push({
+      actor: 'A', state: 'LINK_IDLE', kind: 'ok', seq, owner: 'B',
+      text: 'A validates the ACK and applies ownership after it — B may now originate'
+    });
+
+    let bseq = 700;
+    for (const byte of new TextEncoder().encode('ok')) {
+      events.push(...cleanByteEvents('B', 'A', byte, bseq));
+      bseq += 1;
+    }
+    events.push(...endEvents('B', 'A', bseq));
+    return events;
+  }
+
+  const SCENARIO_BUILDERS = {
+    clean: buildClean,
+    nack: buildNack,
+    missing: buildMissing,
+    dropack: buildDropAck,
+    exhaust: buildExhaust,
+    turn: buildTurn
+  };
+
+  function setBoardState(actor, state) {
+    sim.states[actor] = state;
+    const el = actor === 'A' ? $('#state-a') : $('#state-b');
+    if (!el) return;
+    el.textContent = state;
+    el.classList.toggle('is-hot', state !== 'LINK_IDLE');
+  }
+
+  function updateOwner(owner) {
+    if (!owner) return;
+    sim.owner = owner;
+    $('#owner-badge').textContent = owner;
+    const a = $('#board-a');
+    const b = $('#board-b');
+    a.classList.toggle('is-owner', owner === 'A');
+    b.classList.toggle('is-owner', owner === 'B');
+    $('.b-role', a).textContent = owner === 'A' ? 'originator' : 'responder';
+    $('.b-role', b).textContent = owner === 'B' ? 'originator' : 'responder';
+  }
+
+  function highlightFsm(state) {
+    $$('.fsm-node').forEach((node) => node.classList.toggle('is-active', node.dataset.state === state));
+  }
+
+  function pulseWire(directionValue) {
+    if (!directionValue) return;
+    wireScene.classList.remove('to-b', 'to-a', 'is-live');
+    void wireScene.offsetWidth;
+    wireScene.classList.add(directionValue === 'a2b' ? 'to-b' : 'to-a', 'is-live');
+    clearTimeout(sim.pulseTimer);
+    sim.pulseTimer = setTimeout(() => wireScene.classList.remove('is-live'), 950);
+  }
+
+  function animateSimCycles() {
+    cancelAnimationFrame(sim.cycleFrame);
+    const el = $('#sim-cycle');
+    if (reduceMotion) {
+      el.textContent = '18';
+      return;
+    }
+    const start = performance.now();
+    const duration = 620;
+    const tick = (now) => {
+      const progress = Math.min(1, (now - start) / duration);
+      el.textContent = String(Math.round(progress * 18)).padStart(2, '0');
+      if (progress < 1) sim.cycleFrame = requestAnimationFrame(tick);
+    };
+    sim.cycleFrame = requestAnimationFrame(tick);
+  }
+
+  function appendLog(event) {
+    const glyphs = { tx: '→', ack: '←', nack: '!', lost: '×', ok: '✓', deliver: '◆', warn: '!', retry: '↻', bad: '×', info: '·' };
+    const item = document.createElement('li');
+    item.className = 'log-item kind-' + event.kind;
+    const glyph = document.createElement('span');
+    glyph.className = 'log-glyph';
+    glyph.textContent = glyphs[event.kind] || '·';
+    const body = document.createElement('span');
+    body.textContent = event.text;
+    item.append(glyph, body);
+    simLog.appendChild(item);
+    simLog.scrollTop = simLog.scrollHeight;
+  }
+
+  function renderReceived() {
+    const parts = [];
+    ['B', 'A'].forEach((who) => {
+      const bytes = sim.received[who];
+      if (!bytes.length) return;
+      const text = new TextDecoder().decode(new Uint8Array(bytes));
+      const hexBytes = bytes.map((b) => b.toString(16).padStart(2, '0')).join(' ');
+      parts.push(
+        `<div class="recv-block">
+          <span class="to">delivered at ${who}</span>
+          <div class="text">${esc(JSON.stringify(text))}</div>
+          <div class="hex">${hexBytes}</div>
+        </div>`
+      );
+    });
+    simReceivedEl.innerHTML = parts.length ? parts.join('') : '<p class="recv-empty">Nothing delivered yet.</p>';
+  }
+
+  function updateProgress() {
+    $('#sim-progress-bar').style.width = (sim.events.length ? (sim.index / sim.events.length) * 100 : 0) + '%';
+  }
+
+  function processEvent(event) {
+    if (!event) return;
+    if (event.actor) {
+      setBoardState(event.actor, event.state);
+      highlightFsm(event.state);
+    }
+    if (event.owner) updateOwner(event.owner);
+    if (event.seq !== undefined && event.seq !== null) {
+      sim.seq = event.seq;
+      $('#sim-seq').textContent = event.seq;
+    }
+    if (event.attempt !== undefined && event.attempt !== null) {
+      sim.attempt = event.attempt;
+      $('#sim-attempt').textContent = event.attempt;
+    }
+    if (event.deliver) {
+      sim.received[event.deliver.to].push(event.deliver.byte);
+      renderReceived();
+    }
+    if (event.idle) setBoardState(event.idle, 'LINK_IDLE');
+    if (event.wire) {
+      pulseWire(event.wire);
+      if (event.kind === 'tx' || event.kind === 'ack' || event.kind === 'nack') animateSimCycles();
+    }
+    appendLog(event);
+    if (sim.index < sim.events.length - 1) {
+      simVerdict.textContent = 'In progress — ' + (event.actor ? `${event.actor} · ${event.state}` : 'link event');
+    }
+  }
+
+  function stopSim() {
+    sim.playing = false;
+    clearTimeout(sim.timer);
+    sim.timer = null;
+    simPlay.textContent = 'Play';
+  }
+
+  function finishSim() {
+    stopSim();
+    simVerdict.innerHTML = `<b>${SCENARIO_VERDICTS[sim.scenario]}</b>`;
+    updateProgress();
+  }
+
+  function resetSim() {
+    stopSim();
+    sim.events = SCENARIO_BUILDERS[sim.scenario]();
+    sim.index = 0;
+    sim.received = { A: [], B: [] };
+    sim.seq = null;
+    sim.attempt = null;
+    sim.owner = 'A';
+    sim.states = { A: 'LINK_IDLE', B: 'LINK_IDLE' };
+    simLog.innerHTML = '';
+    simReceivedEl.innerHTML = '<p class="recv-empty">Nothing delivered yet.</p>';
+    simVerdict.textContent = 'Press Play or Step through the exchange.';
+    $('#sim-cycle').textContent = '00';
+    $('#sim-seq').textContent = '—';
+    $('#sim-attempt').textContent = '—';
+    setBoardState('A', 'LINK_IDLE');
+    setBoardState('B', 'LINK_IDLE');
+    updateOwner('A');
+    highlightFsm('LINK_IDLE');
+    $('#sim-scenario-note').textContent = SCENARIO_NOTES[sim.scenario] || '';
+    updateProgress();
+    if (sim.events.length) {
+      processEvent(sim.events[0]);
+      sim.index = 1;
+      updateProgress();
+    }
+  }
+
+  function advanceSim() {
+    if (sim.index >= sim.events.length) {
+      finishSim();
+      return false;
+    }
+    processEvent(sim.events[sim.index]);
+    sim.index += 1;
+    updateProgress();
+    if (sim.index >= sim.events.length) {
+      finishSim();
+      return false;
+    }
+    return true;
+  }
+
+  function scheduleSim() {
+    clearTimeout(sim.timer);
+    if (!sim.playing) return;
+    sim.timer = setTimeout(() => {
+      if (!sim.playing) return;
+      if (advanceSim()) scheduleSim();
+    }, 720 / sim.speed);
+  }
+
+  simPlay.addEventListener('click', () => {
+    if (sim.playing) {
+      stopSim();
+      return;
+    }
+    if (sim.index >= sim.events.length) resetSim();
+    sim.playing = true;
+    simPlay.textContent = 'Pause';
+    scheduleSim();
+  });
+
+  simStep.addEventListener('click', () => {
+    stopSim();
+    if (sim.index >= sim.events.length) {
+      resetSim();
+      return;
+    }
+    advanceSim();
+  });
+
+  simReset.addEventListener('click', resetSim);
+  simScenario.addEventListener('change', () => {
+    sim.scenario = simScenario.value;
+    resetSim();
+  });
+  simMessage.addEventListener('change', () => {
+    sim.message = simMessage.value;
+    resetSim();
+  });
+  simMessage.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') simMessage.blur();
+  });
+  simSpeed.addEventListener('change', () => {
+    sim.speed = Number(simSpeed.value) || 1;
+    if (sim.playing) scheduleSim();
+  });
+
+  /* ------------------------------------------------------------ FSM panel */
+  const FSM_INFO = {
+    BOOT: 'Power-on reset. NVS is initialised before Wi-Fi or the protocol task; a CRC catalogue self-test gates the link start.',
+    WIFI_INIT: 'Station mode, a fixed and identical channel, ESP-NOW initialised, callbacks registered and the peer MAC added.',
+    LINK_IDLE: 'Waiting with no transaction in flight. The board may originate a new request if it owns the link, or accept an inbound clock burst from the peer.',
+    TX_FRAME: 'The serialized task emits 18 pairs. For each cycle it sets the IR symbol, submits one ESP-NOW packet, waits for the local send callback, then pulses the wired clock.',
+    WAIT_RESPONSE: 'Listening on CLK_RX for the peer\'s complete ACK or NACK frame. A timeout or invalid response retransmits the same request sequence, up to three retries.',
+    LINK_ERROR: 'The retry budget is exhausted. No new DATA is originated; the link stays recoverable in an error/idle state until reset.',
+    RX_FRAME: 'Counting rising edges on CLK_RX and buffering lane bits by cycle index. Packets may arrive before or after their edge; a late packet still lands in the right slot.',
+    VALIDATE_RX: 'Exactly 18 pairs, SYN 0x66, SFD 0xD5, a supported CONTROL, the CRC, then protocol role and outstanding sequence. A duplicate sequence reuses the cached response.',
+    TX_RESPONSE: 'Build and send a complete ACK or NACK frame on both data lanes, clocked from this board\'s own CLK_TX. Responses are never acknowledged.'
+  };
+
+  function showFsmDetail(state) {
+    const info = FSM_INFO[state];
+    if (!info) return;
+    const detail = $('#fsm-detail');
+    $('h4', detail).textContent = state;
+    $('p', detail).textContent = info;
+    highlightFsm(state);
+  }
+
+  $$('.fsm-node').forEach((node) => {
+    const activate = () => showFsmDetail(node.dataset.state);
+    node.addEventListener('click', activate);
+    node.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        activate();
+      }
+    });
+  });
+
+  /* ------------------------------------------------------------ packet envelope */
+  const PACKET_INFO = [
+    ['version', '<b>Byte 0 · 0x01</b> — envelope version. A mismatch is dropped and counted; the app payload data is never trusted without it.'],
+    ['session', '<b>Bytes 1–2 · big-endian session ID</b> — 0x0001 in the lab build. Both boards must share it. It separates sessions at reset, but a static ID is a v1.0 lab convenience, not a nonce.'],
+    ['frame_seq', '<b>Bytes 3–4 · big-endian sequence</b> — identical for every one of the 18 packets in a frame, and reused by the ACK/NACK that answers it. A retry keeps the same sequence.'],
+    ['cycle', '<b>Byte 5 · cycle index</b> — 0…17. This is what puts a delayed packet in the right slot and prevents all following bits from shifting.'],
+    ['lane_bit', '<b>Byte 6 · lane bit</b> — exactly 0 or 1. This is the only logical PHY data in the packet. Everything else is transport metadata.'],
+    ['total', '<b>7 bytes</b> per application message, one message per cycle. Wi-Fi MAC overhead is additional. A 36-bit frame therefore uses 18 ESP-NOW messages — never one packed frame.']
+  ];
+
+  $$('.packet-byte').forEach((button) => {
+    button.addEventListener('click', () => {
+      $$('.packet-byte').forEach((other) => other.classList.toggle('is-on', other === button));
+      const info = PACKET_INFO[Number(button.dataset.byte)];
+      if (info) $('#packet-detail').innerHTML = info[1];
+    });
+  });
+
+  /* ------------------------------------------------------------ CRC lab */
+  const crcText = $('#crc-text');
+  const crcLabProfile = $('#crc-lab-profile');
+  const crcLabValue = $('#crc-lab-value');
+  const crcLabNote = $('#crc-lab-note');
+  let crcHexMode = false;
+
+  function parseHexBytes(text) {
+    const cleaned = String(text).replace(/0x/gi, '').replace(/[^0-9a-f]/gi, '');
+    if (!cleaned || cleaned.length % 2 !== 0) return null;
+    const out = [];
+    for (let i = 0; i < cleaned.length; i += 2) out.push(parseInt(cleaned.slice(i, i + 2), 16));
+    return out;
+  }
+
+  function renderCrcParams(key) {
+    const p = CRC_PROFILES[key];
+    $('#crc-params').innerHTML = [
+      ['width', '8'],
+      ['poly', hex(p.poly)],
+      ['init', hex(p.init)],
+      ['refin', String(p.refin)],
+      ['refout', String(p.refout)],
+      ['xorout', hex(p.xorout)],
+      ['catalogue check', hex(p.check)]
+    ].map(([k, v]) => `<div class="const-row"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('');
+  }
+
+  function updateCrcLab() {
+    const key = crcLabProfile.value;
+    let bytes;
+    if (crcHexMode) {
+      bytes = parseHexBytes(crcText.value);
+      if (bytes === null) {
+        crcLabValue.textContent = '—';
+        crcLabNote.textContent = 'Enter an even number of hex digits, e.g. 01 41.';
+        renderCrcParams(key);
+        return;
+      }
+    } else {
+      bytes = Array.from(new TextEncoder().encode(crcText.value));
+    }
+    const value = crc8(bytes, key);
+    const p = CRC_PROFILES[key];
+    crcLabValue.textContent = hex(value);
+    const isCheck = !crcHexMode && crcText.value === '123456789';
+    crcLabNote.textContent = isCheck
+      ? `${p.name}("123456789") — ${value === p.check ? 'matches' : 'does not match'} the catalogue check ${hex(p.check)}`
+      : `${p.name} over ${bytes.length} byte${bytes.length === 1 ? '' : 's'}${crcHexMode ? ' (hex)' : ''} — wire default is CRC-8/SMBUS`;
+    renderCrcParams(key);
+  }
+
+  crcText.addEventListener('input', () => { crcHexMode = false; updateCrcLab(); });
+  crcLabProfile.addEventListener('change', updateCrcLab);
+  $$('[data-crc-input]').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      crcHexMode = chip.dataset.hex === '1';
+      crcText.value = chip.dataset.crcInput;
+      updateCrcLab();
+    });
+  });
+
+  /* ------------------------------------------------------------ checklist */
+  function initChecklist() {
+    const inputs = $$('#checklist input[data-check]');
+    let saved = [];
+    try {
+      saved = JSON.parse(load('phy-checklist') || '[]');
+      if (!Array.isArray(saved)) saved = [];
+    } catch (err) { saved = []; }
+
+    inputs.forEach((input) => {
+      input.checked = saved.includes(input.dataset.check);
+      input.addEventListener('change', updateChecklist);
+    });
+    updateChecklist();
+
+    function updateChecklist() {
+      const checked = inputs.filter((input) => input.checked).map((input) => input.dataset.check);
+      store('phy-checklist', JSON.stringify(checked));
+      const total = inputs.length;
+      const count = checked.length;
+      $('#check-count').textContent = `${count} / ${total}`;
+      $('#check-bar').style.width = `${(count / total) * 100}%`;
+    }
+  }
+
+  /* ------------------------------------------------------------ reveal + scrollspy */
+  function initReveal() {
+    const elements = $$('.reveal');
+    if (reduceMotion || !('IntersectionObserver' in window)) {
+      elements.forEach((element) => element.classList.add('in'));
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('in');
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.12, rootMargin: '0px 0px -8% 0px' });
+    elements.forEach((element) => observer.observe(element));
+  }
+
+  function initScrollspy() {
+    const links = $$('.nav a');
+    if (!('IntersectionObserver' in window)) return;
+    const byId = new Map(links.map((link) => [link.getAttribute('href').slice(1), link]));
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        links.forEach((link) => link.classList.remove('is-current'));
+        const link = byId.get(entry.target.id);
+        if (link) link.classList.add('is-current');
+      });
+    }, { rootMargin: '-45% 0px -50% 0px', threshold: 0 });
+    $$('main section[id]').forEach((section) => observer.observe(section));
+  }
+
+  /* ------------------------------------------------------------ initial state */
+  setType('DATA');
+  dataInput.value = hex(frameState.data);
+  renderFrame();
+  initWiring();
+  updateBudget();
+  setPhaseDom(0);
+  updateCycleEcho();
+  renderCrcParams('smbus');
+  updateCrcLab();
+  initChecklist();
+  initReveal();
+  initScrollspy();
+  resetSim();
+  showFsmDetail('LINK_IDLE');
+
+  // Keep the example frame in sync if the user changes the message byte
+  // while the timing panel is visible.
+  $('#sim-message').addEventListener('input', () => {
+    sim.message = $('#sim-message').value;
+  });
+})();
+</script>
+</body>
+</html>

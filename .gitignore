@@ -26,3 +26,7 @@ __pycache__/
 # macOS
 .DS_Store
 ._*
+
+# Host unit test binary
+host_test/test_main
+host_test/test_main.dSYM/

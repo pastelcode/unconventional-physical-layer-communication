@@ -1,0 +1,83 @@
+menu "Physical layer protocol"
+
+    choice PHY_NODE_ROLE
+        prompt "Node role"
+        default PHY_NODE_A
+        help
+            Both boards run the same firmware; only this role differs.
+            Node A starts as the DATA originator (spec section 5), node B
+            answers until it receives a TURN frame.
+    config PHY_NODE_A
+        bool "Node A (DATA originator at boot)"
+    config PHY_NODE_B
+        bool "Node B (responder at boot)"
+    endchoice
+
+    config PHY_PEER_MAC
+        string "Peer Wi-Fi MAC (aa:bb:cc:dd:ee:ff)"
+        default ""
+        help
+            Destination MAC for the one-bit ESP-NOW lane packets, and the
+            sender address that packets must come from.  Leave empty for
+            broadcast addressing: the first foreign sender is then latched
+            as the peer for validation, which is convenient in the lab but
+            does not reject third-party traffic that arrives first.
+
+    config PHY_SESSION_ID
+        int "Session ID (both boards must match)"
+        range 0 65535
+        default 1
+        help
+            Static transport session identifier carried in every lane packet
+            (spec section 6).  v1.0 assumes both boards start together.
+
+    config PHY_WIFI_CHANNEL
+        int "Wi-Fi channel (both boards must match)"
+        range 1 13
+        default 6
+
+    choice PHY_CRC_PROFILE
+        prompt "CRC-8 profile"
+        default PHY_CRC_SMBUS
+        help
+            There is no on-wire negotiation: both boards must be built with
+            the same profile.  Only CRC-8/SMBUS is validated by default.
+    config PHY_CRC_SMBUS
+        bool "CRC-8/SMBUS (poly 0x07, init 0x00, check 0xF4) [v1.0 wire default]"
+    config PHY_CRC_AUTOSAR
+        bool "CRC-8/AUTOSAR (poly 0x2F, init 0xFF, xorout 0xFF, check 0xDF)"
+    config PHY_CRC_SAE_J1850
+        bool "CRC-8/SAE-J1850 (poly 0x1D, init 0xFF, xorout 0xFF, check 0x4B)"
+    config PHY_CRC_MAXIM_DOW
+        bool "CRC-8/MAXIM-DOW (poly 0x31, reflected, check 0xA1)"
+    endchoice
+
+    config PHY_IR_DEMODULATING
+        bool "IR receiver is a 38 kHz demodulating module (TSOP/VS1838)"
+        default y
+        help
+            With this enabled, logical 1 is a 38 kHz carrier burst and
+            logical 0 is silence.  Without it, the IR TX GPIO carries the
+            logical level directly for a raw emitter/detector front end.
+
+    config PHY_IR_RX_ACTIVE_LOW
+        bool "IR receiver output is active low"
+        default y
+        help
+            Demodulating modules idle HIGH and pull LOW during a carrier
+            burst, so a mark reads as an active-low input.This must match the
+            actual receiver on the bench.
+
+    config PHY_IR_CARRIER_HZ
+        int "IR carrier frequency (Hz)"
+        default 38000
+        depends on PHY_IR_DEMODULATING
+
+    config PHY_LOG_VERBOSE
+        bool "Verbose per-cycle logging"
+        default n
+        help
+            Logs every clock cycle, every frame bit pattern and state change.
+            Useful for timing measurements, noisy on a 115200 baud console.
+
+endmenu
